@@ -1,0 +1,54 @@
+services:
+  harness_postgres:
+    image: postgres:16-alpine
+    container_name: harness_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: harness_admin
+      POSTGRES_PASSWORD: harness_admin
+      POSTGRES_DB: harness_os
+    volumes:
+      - harness_pgdata:/var/lib/postgresql/data
+      - ./init:/docker-entrypoint-initdb.d:ro
+      - ./seed:/gov-seed:ro
+    networks:
+      - harness_os_default
+    # Deliberately no `ports:` mapping to the host - the governance DB is
+    # only reachable by containers on harness_os_default, never by a
+    # host-native process or a governed project's own stack (§2.2).
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U harness_admin -d harness_os"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  harness_gate_daemon:
+    image: harness-os:latest
+    container_name: harness_gate_daemon
+    restart: unless-stopped
+    command: ["gate-daemon"]
+    environment:
+      DATABASE_URL: postgres://harness_app:harness_app@harness_postgres:5432/harness_os
+      # Design gap caught during implementation (see packages/core/src/project-path.ts):
+      # this container is persistent and reached via `docker exec`, which
+      # cannot attach a new bind mount per invocation the way `docker run -v`
+      # does for the ephemeral mcp-serve container (§2.3). So every governed
+      # project this daemon might ever need to read has to live under one
+      # broad mount, established once here, with paths translated at the
+      # point of file access.
+      HARNESS_HOST_PROJECTS_ROOT: ${HARNESS_PROJECTS_ROOT:-${HOME}/projects}
+      HARNESS_WORKSPACES_ROOT: /workspaces
+    volumes:
+      - ${HARNESS_PROJECTS_ROOT:-${HOME}/projects}:/workspaces:ro
+    depends_on:
+      harness_postgres:
+        condition: service_healthy
+    networks:
+      - harness_os_default
+
+networks:
+  harness_os_default:
+    name: harness_os_default
+
+volumes:
+  harness_pgdata:

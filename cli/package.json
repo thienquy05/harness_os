@@ -1,0 +1,13 @@
+{
+  "name": "@harness-os/cli",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/gate-check.js",
+  "scripts": {
+    "build": "tsc --build"
+  },
+  "dependencies": {
+    "@harness-os/core": "*"
+  }
+}

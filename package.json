@@ -1,0 +1,26 @@
+{
+  "name": "harness-os",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Governance, specification, validation, and traceability MCP server sitting between Claude Code and governed projects.",
+  "workspaces": [
+    "packages/*",
+    "server",
+    "cli"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:watch": "vitest",
+    "lint": "tsc --build --pretty false"
+  },
+  "devDependencies": {
+    "@testcontainers/postgresql": "^12.0.4",
+    "@types/node": "^22.10.0",
+    "@vitest/coverage-v8": "^2.1.8",
+    "testcontainers": "^12.0.4",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

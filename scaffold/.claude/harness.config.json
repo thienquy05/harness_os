@@ -1,0 +1,10 @@
+{
+  "_comment": "Template stamped by `harness init` (Phase 3, cli/src/harness-init.ts), which substitutes project-specific globs and test commands. Placeholder defaults below.",
+  "gatedGlobs": ["src/**/*.ts", "src/**/*.tsx"],
+  "exemptGlobs": ["**/*.md", "**/*.lock", "**/package-lock.json", "**/*.json"],
+  "testGlobs": ["**/*.test.ts", "**/*.spec.ts"],
+  "testCommands": [
+    { "globs": ["**/*.py"], "command": "pytest" },
+    { "globs": ["**/*.ts", "**/*.tsx"], "command": "npm test" }
+  ]
+}

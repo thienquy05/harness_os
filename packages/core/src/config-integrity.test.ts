@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -108,13 +108,57 @@ describe('config-integrity', () => {
 
     it('commits the tracked files so a freshly-verified project has no untracked config', async () => {
       const { pool } = fakePoolWithChecksumRows();
-      await recordVerifiedConfig(pool, projectPath, 'test-human');
+      const result = await recordVerifiedConfig(pool, projectPath, 'test-human');
+      expect(result.committed).toBe(true);
 
       // Before the fix, these files would still show as untracked ("??") —
       // post-bash-revert.sh's backstop would `rm -f` them on the very next
       // Bash call, deleting the harness config it's supposed to protect.
       const status = await gitStatusPorcelain(projectPath);
       expect(status).toBe('');
+    });
+
+    it('commits even when the repo has no configured git author identity', async () => {
+      // Regression: a fresh `docker run --rm` container (harness-init's real
+      // invocation model) has no persistent ~/.gitconfig, unlike this test's
+      // own initGitRepo helper which sets one locally. Unset it to reproduce
+      // the "Please tell me who you are" failure a real fire hit.
+      await execFileAsync('git', ['config', '--unset', 'user.email'], { cwd: projectPath });
+      await execFileAsync('git', ['config', '--unset', 'user.name'], { cwd: projectPath });
+
+      const { pool } = fakePoolWithChecksumRows();
+      await recordVerifiedConfig(pool, projectPath, 'test-human');
+
+      const status = await gitStatusPorcelain(projectPath);
+      expect(status).toBe('');
+    });
+
+    it('does not throw when a git write fails on an otherwise-valid repo (e.g. a read-only mount)', async () => {
+      // Regression: reconcile-config (cli/src/reconcile-config.ts) still runs
+      // via `docker exec harness_gate_daemon` against the daemon's read-only
+      // `:ro` /workspaces mount. Installing git in the image for
+      // harness-init's sake made `git rev-parse --is-inside-work-tree` (a
+      // read) start succeeding there too, so execution now reaches `git add`
+      // (a write), which fails with EROFS. reconcile-config's `main` has no
+      // try/catch around recordVerifiedConfig, so an uncaught throw here
+      // would crash it *after* the checksum row was already inserted,
+      // leaving the DB and git HEAD diverged — the exact split-brain this
+      // function exists to prevent. Reproduce the write failure by making
+      // .git read-only: rev-parse still succeeds (confirmed above), but `git
+      // add` fails with "Unable to create .git/index.lock: Permission
+      // denied", verified empirically before writing this test.
+      // A caller (reconcile-config, Open Item #22) needs to know the commit
+      // didn't happen so it can refuse to report success — resolving with
+      // `committed: false` rather than throwing lets it do that instead of
+      // silently claiming the project is in a consistent state.
+      await chmod(join(projectPath, '.git'), 0o555);
+      try {
+        const { pool } = fakePoolWithChecksumRows();
+        const result = await recordVerifiedConfig(pool, projectPath, 'test-human');
+        expect(result.committed).toBe(false);
+      } finally {
+        await chmod(join(projectPath, '.git'), 0o755);
+      }
     });
 
     it('re-committing after a legitimate reconcile keeps git HEAD in lockstep with the new DB hash', async () => {

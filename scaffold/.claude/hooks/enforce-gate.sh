@@ -25,6 +25,37 @@ if [[ "$HARNESS_TOOL_NAME" != "Edit" && "$HARNESS_TOOL_NAME" != "Write" && "$HAR
   exit 0
 fi
 
+# TDD RED-phase gate, execution half (§12.3 / Option 1): when the Bash
+# command Claude is about to run matches this project's checksummed
+# harness.config.json testCommands, enforce-gate.sh — not Claude, not
+# gate-check.js inside harness_gate_daemon (which has no toolchain and only a
+# read-only mount, see project-path.ts) — runs that exact command itself,
+# host-side, real cwd, real toolchain, and records the real exit code it
+# observed. Claude's own identical Bash call still runs normally right after
+# (not blocked here), so it sees full test output as usual; this block only
+# ensures a *trustworthy* copy of the result reaches test_runs first. See
+# gates.ts's red-phase check and test-runs.ts's recordTestRun for what
+# consumes this, and plan §12.3 for the residual gap this doesn't close (a
+# fabricated direct `gate-check --mode record-test-run` call bypassing this
+# hook entirely).
+# 120s bound (Open Item, see plan §12.3): a hung test command must not stall
+# Claude Code's tool call forever. `timeout` sends SIGTERM and the shell sees
+# exit 124, which gets recorded as a (possibly spurious) RED — a known,
+# documented imprecision, not a silent hang.
+if [[ "$HARNESS_TOOL_NAME" == "Bash" && -n "$HARNESS_MATCHED_TEST_COMMAND" ]]; then
+  trap - ERR
+  set +e
+  TEST_EXIT=$(cd "$HARNESS_PROJECT_PATH" && timeout 120 bash -c "$HARNESS_MATCHED_TEST_COMMAND" >/dev/null 2>&1; echo $?)
+  RECORD_JSON=$(docker exec harness_gate_daemon node cli/dist/gate-check.js \
+    --mode record-test-run \
+    --project-path "$HARNESS_PROJECT_PATH" \
+    --command "$HARNESS_MATCHED_TEST_COMMAND" \
+    --exit-code "$TEST_EXIT" 2>&1)
+  set -e
+  trap 'echo "{\"action\":\"internal_error\",\"reason\":\"enforce-gate.sh failed unexpectedly - failing closed (CONST-CORE-004)\"}" >&2; exit 2' ERR
+  echo "[enforce-gate] harness-os independently ran and recorded this test command (exit $TEST_EXIT): $RECORD_JSON" >&2
+fi
+
 # Conservative heuristic (Open Item #8): a Bash call with no recognized write
 # target is not gated here. post-bash-revert.sh's git-diff backstop
 # (§2.1 component 4) is what catches whatever this misses — a false negative

@@ -1,0 +1,27 @@
+{
+  "$id": "https://harness-os.local/schema/infra.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Infra Spec",
+  "type": "object",
+  "required": ["id", "title", "components"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}-INFRA-[0-9]{3,}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "components": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "type", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "type": { "type": "string", "minLength": 1 },
+          "description": { "type": "string", "minLength": 1 },
+          "dependsOn": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

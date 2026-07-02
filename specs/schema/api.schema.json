@@ -1,0 +1,29 @@
+{
+  "$id": "https://harness-os.local/schema/api.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "API Spec",
+  "type": "object",
+  "required": ["id", "title", "endpoints"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}-API-[0-9]{3,}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "endpoints": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["method", "path", "description"],
+        "additionalProperties": false,
+        "properties": {
+          "method": { "type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"] },
+          "path": { "type": "string", "pattern": "^/" },
+          "description": { "type": "string", "minLength": 1 },
+          "requestSchema": { "type": "object" },
+          "responseSchema": { "type": "object" },
+          "authRequired": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

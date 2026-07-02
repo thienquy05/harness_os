@@ -398,6 +398,14 @@ JSON-RPC exchange (`initialize` → `tools/list` → `tools/call get_constitutio
 
 - `cli/src/harness-init.ts` — calls `project-init`'s stack detection first, then copies `scaffold/.claude/` into the target project, substituting the project prefix (§4) and stack-specific reviewer names (§1.3) into the stamped files.
 
+**As-built, differs from the sketch above — see §12.6 for why:** a headless CLI can't invoke the ECC
+`project-init` skill, so `harness-init.ts` reimplements a small, dependency-free stack sniff
+(`packages/core/src/stack-detection.ts`) instead of calling out to it. §1.3's checkpoint was resolved by
+generalizing it, not by confirming the ApexTrade-specific draft as-is (user's explicit choice, §12.6): the
+stamped `AGENTS.md` names already-existing ECC reviewer agents mechanically mapped from the detected stack,
+not the hardcoded FastAPI/React list — §1.3's draft stays open, deferred to Phase 4's actual ApexTrade
+retrofit.
+
 **Gates activated after Phase 3:** full workflow orchestration with logging; any project scaffolded with one command.
 
 ---
@@ -442,8 +450,9 @@ Runs after Phase 1. `ApexTrade` has no backend code yet, so Pass 1/2 execute onc
 | Phase | Ships independently? | Depends on |
 |---|---|---|
 | 1 — Constitution + Risk + Decision Log + enforcement hook | **✅ Done — built, tested (61 tests, 88% coverage), verified end-to-end against real Docker containers (§12.1)** | Nothing |
-| 2 — Spec Registry + Verification Gates + Traceability | Not started | Phase 1 |
-| 3 — Workflow Engine + Scaffold | Not started | Phases 1–2 |
+| 2 — Spec Registry + Verification Gates + Traceability | **✅ Done — built, tested (131 tests total), verified end-to-end against real Docker/Postgres, including a real, in-session Claude-Code-triggered `enforce-gate.sh` RED→write→GREEN→re-blocked cycle (§12.4) that caught and fixed a genuine absolute-path relativization bug no synthetic test reached (Open Item #16, resolved).** | Phase 1 |
+| 3, part A — Workflow Engine | **✅ Done — built, tested (152 tests total), verified via a real MCP round trip against the running server (§12.5): a live `run_workflow` → `assess_risk` → `workflow_status` sequence correctly advanced a real `hotfix` run stage-by-stage against real Postgres evidence.** | Phases 1–2 |
+| 3, part B — Per-Project Scaffold (`harness init`) | **✅ Done — built, tested (186 tests total), verified via a real, ephemeral writable-mount `docker run harness-init` against a fresh throwaway project, followed by a real `claude -p` fire proving the freshly-stamped config actually governs a write (§12.6). Caught and fixed three real bugs no unit test reached, then three more (one requiring a two-pass fix) in a post-review hardening pass (§12.6a).** | Phase 3 part A |
 | 4 — ApexTrade retrofit | Not started | Phases 1–3; Pass 1/2 additionally need ApexTrade backend code to exist |
 
 ---
@@ -451,17 +460,25 @@ Runs after Phase 1. `ApexTrade` has no backend code yet, so Pass 1/2 execute onc
 ## 11. Open Items
 
 1. ~~**Pipeline diagram**~~ — resolved: all four conference slides attached and reconciled (§0 decision 2, §4's state-machine addition).
-2. **SKILLS.md / AGENTS.md drafts** (§1.3) — need explicit sign-off before writing to disk.
+2. **SKILLS.md / AGENTS.md drafts** (§1.3) — partially resolved: asked the user at Phase 3 part B implementation time (the checkpoint's own "confirm or edit before file generation" applies exactly there, since that's when scaffold stamping first happens) whether `harness-init.ts` should stamp the ApexTrade-specific draft verbatim or generalize it. User chose to generalize (§12.6) — `AGENTS.md` is now stamped from a mechanical stack→known-reviewer-agent-name table, no ApexTrade-specific or SKILLS.md content ever written to disk. The original draft itself (§1.3) is still unconfirmed and stays open, deferred to Phase 4's actual ApexTrade retrofit, where SKILLS.md's three proposed skills would need their own separate sign-off.
 3. **Reddit post content** — unfetchable by tool restriction; paste the body if you want it mapped.
 4. **HTTP transport alternative** (§2.2) — flag if you'd rather not use stdio/`docker run` per invocation.
 5. ~~**Human-ack env var naming**~~ — resolved in mechanism (§2.1, §3.5a: `decisions.status` + TTY-gated `harness approve`), env var name itself still needs picking at implementation time (e.g. `HARNESS_REQUIRE_TTY_APPROVAL`).
-6. **`test → commit_sha` traceability edge source** — needs a concrete trigger (likely a `PostToolUse`-on-commit hook, or `record_decision` called at the end of a workflow's Work stage with the resulting SHA) — decide at Phase 2 implementation time, not blocking the plan.
+6. **`test → commit_sha` traceability edge source** — `trace_artifact` (Phase 2 part B, §12.4) can record this edge once a commit SHA exists, but nothing calls it automatically yet. Still needs a concrete trigger (likely a `PostToolUse`-on-commit hook, or `record_decision` called at the end of a workflow's Work stage with the resulting SHA) — decide at Phase 3 implementation time (the Workflow Engine is the natural place to own this), not blocking the plan.
 7. **`run_workflow`'s directive-stepping protocol** — how Claude fetches step N+1 of a multi-step directive sequence (poll `workflow_status`? server returns the next directive inline after `record_decision`?) — decide at Phase 3 implementation time.
 8. **`Bash`-heuristic false-positive tolerance** (§2.1, component 1) — shipped conservative in Phase 1 (`scaffold/.claude/hooks/parse-tool-call.mjs`: recognizes `>`/`>>` redirects, `sed -i ... FILE`, `tee FILE`; anything else is treated as a non-write and falls through to the PostToolUse revert backstop). Verified in §12.1 that a real Bash-mediated tamper of a tracked config file gets caught and reverted even though the PreToolUse heuristic wasn't in the loop for that test. Still needs real-world tuning from dogfooding — not yet done, since Phase 1 hasn't been used in an actual working session yet.
-9. **`git` precondition for `post-bash-revert.sh`** (§2.1, component 4) — implemented as a soft precondition: the hook checks `git rev-parse --is-inside-work-tree` itself and prints a warning + exits 0 (doesn't crash) if the governed project isn't a git repo, rather than requiring `harness init` to enforce it upfront (harness-init.ts doesn't exist yet — Phase 3). ApexTrade isn't yet a git repo (§0.1) — still needs `git init` before Phase 4's Pass 3.
+9. ~~**`git` precondition for `post-bash-revert.sh`**~~ **Resolved for any project scaffolded via `harness-init.ts` (§12.6):** `harness-init.ts` now runs `git init` itself when the target isn't already a git repo, before calling `recordVerifiedConfig` — so post-bash-revert.sh's precondition holds for every project from the moment it's initialized. ApexTrade specifically (§0.1) will get this for free once Phase 4 runs `harness init` against it, rather than needing a separate manual `git init` step.
 10. **`config_checksums` bootstrap trust** (§3.5a) — mechanism confirmed working (§12.1): `recordVerifiedConfig` is the exact function `harness-init.ts` (Phase 3) will call; tested directly since `harness-init` itself doesn't exist yet. The "run by a human, not delegated to in-session Claude Code" note still applies and isn't yet written into `docs/` (no `docs/*.md` files exist yet — deferred, low urgency until Phase 3).
 11. **NEW — persistent `harness_gate_daemon` can't see arbitrary governed-project paths** (found during implementation, not anticipated in the original plan): `docker exec` into an already-running container can't attach a new bind mount per call, unlike `docker run -v ...` (§2.3's mechanism for the ephemeral mcp-serve container). Fixed by mounting one broad projects root (`$HARNESS_PROJECTS_ROOT`, default `$HOME/projects`) into `harness_gate_daemon` at `/workspaces:ro`, with path translation in `packages/core/src/project-path.ts` applied only at the point of file access — `project_path` columns in Postgres always store the canonical host path. Verified in §12.1. Residual limitation: any governed project living outside `$HARNESS_PROJECTS_ROOT` is invisible to the daemon — acceptable for a solo-developer setup where all projects live under `~/projects`, but worth flagging if that ever changes.
 12. **NEW — `gate-daemon`'s "warm connection pool" doesn't survive `docker exec`** (§2.2's phrasing needed a correction, not just an implementation detail): each `docker exec harness_gate_daemon ... gate-check` spawns a brand-new OS process, which cannot share the daemon's own in-memory `pg.Pool`. What's actually saved by keeping the container warm is `docker run`'s image/container-creation cost, not connection setup — each invocation still opens its own lightweight pg connection over the container-local network, which is cheap on its own. `gate-daemon.ts`'s real job is just: stay alive, fail fast at startup if `DATABASE_URL` is wrong, heartbeat every 60s.
+13. ~~**NEW — the runtime Docker image (`node:22-slim`) has no `git` binary**~~ **Resolved in Phase 3 part B (§12.6), and reframed on the way:** the original framing assumed `git` alone was the fix, since `commitTrackedConfig` had only ever been observed running inside `harness_gate_daemon` (read-only `/workspaces` mount). Building `harness-init.ts` surfaced that its own git-writing work *cannot* run there at all — a read-only mount rejects the write before git even matters (confirmed empirically: `touch` inside `harness_gate_daemon` fails with `Read-only file system`). Fixed with two changes together: (a) `RUN apt-get install -y git` in `server/Dockerfile`'s runtime stage (the fix this item originally asked for), and (b) `harness-init.ts` invoked via its own ephemeral `docker run --rm -i --network harness_os_default -v <path>:<path> harness-os:latest harness-init ...` — a **writable** mount at the project path, mirroring `mcp-serve`'s invocation model (§2.3), not `gate-check`'s `docker exec harness_gate_daemon` model. `reconcile-config` still runs via `docker exec harness_gate_daemon` and so still silently no-ops its git commit today (now for a *different* reason than before — `EROFS` instead of `ENOENT`) — not fixed in this pass since it's outside Part B's scope, named here so it isn't mistaken for already resolved.
+14. **NEW — TDD RED-phase gate's "any failing test satisfies the gate" imprecision** (§12.4, named during design, not found empirically): `gates.ts`'s red-phase check only looks at the *most recent* `test_runs` row for the whole project — it doesn't verify the failing test is actually related to the file being written. A project that's already red for an unrelated reason opens the gate for any implementation write with zero real TDD enforcement, and nothing detects this. Precise spec-to-file linkage needs `workflow_runs.spec_id` (Phase 3) to exist; this is a deliberate, documented scope boundary for Phase 2, not a bug — see §12.4's design-decision log for the full reasoning.
+15. **NEW — `validate_coverage` trusts the reported percentage** (§12.4): unlike `recordTestRun`, there's no host-side interception verifying the number Claude reports — coverage tool output format varies too much per language/runner to intercept generically the way one configured test command string can be. A narrower instance of the same self-report risk named for Option 1's residual gap (item below).
+16. ~~**Part B's `enforce-gate.sh`/`parse-tool-call.mjs` changes have only been script-level verified, not fired by a real Claude Code session.**~~ **Resolved — and it caught a real bug.** A real, in-session `claude -p` fire against a throwaway project (`~/projects/harness-partb-realfire`, prepped with `recordVerifiedConfig` and a side-channel-controlled test command, cleaned up afterward) found that `gates.ts`'s red-phase check called `classifyFile` with the raw `tool_input.file_path` — always an **absolute** path in a real payload — against globs like `"src/**/*.ts"`, which `minimatch` never matches against an absolute string. Every existing test (`gates.test.ts`) had used a relative path for convenience, so the gate silently gated nothing in practice: the first real fire wrote a gated file with zero test runs recorded, no block at all. Fixed in `gates.ts` by relativizing `input.filePath` against `input.projectPath` (`node:path`'s `relative()`) before calling `classifyFile`, whenever the incoming path is absolute — a regression test using an absolute path was added to `gates.test.ts` first (confirmed RED against the old code), then the fix made it pass. Full cycle then re-verified against ground truth (Postgres `test_runs` rows and the actual filesystem, not the nested session's own narration): write blocked with `establish_red_phase` (0 test runs) → Claude ran the configured test command, hook recorded a real RED → write succeeded → Claude ran the test command again, hook recorded a real GREEN → next gated write blocked again (timed out retrying, since the fixture's side-channel had no way to produce a fresh RED — expected, not a bug). This is exactly the class of bug §12.3 flagged as only reachable by a real fire, not a synthetic payload — the synthetic payload used to "verify" this gate earlier in Part B used a relative path too, and would have kept passing forever.
+17. **NEW — the relativization fix (item 16) trusts `input.projectPath` (`payload.cwd`) to equal the project root.** The real fire launched `claude -p` from the root, so `relative(projectPath, filePath)` resolved correctly. A session launched from a subdirectory of a governed project would compute the wrong relative path against `gatedGlobs`. This fails *closed*, not open — `readHarnessConfig`/`verifyConfigIntegrity` would find no `config_checksums` row for that subdirectory path and return `run_harness_init` — so it's a UX/robustness wart (a legitimate session launched from a subdir looks uninitialized), not a security hole. Not blocking; worth a real fire from a subdirectory whenever `harness-init.ts` (Phase 3) makes this easy to test.
+18. **NEW — git's dubious-ownership check (post-CVE-2022-24765) blocks `commitTrackedConfig`/`harness-init.ts` the moment the writable-mount model (item 13's fix) is actually used** (found during Phase 3 part B's live fire, §12.6, not anticipated by any prior design note): the container always runs as root, but a host-bind-mounted project directory is owned by the host user — git refuses to operate on a repo whose top-level directory belongs to a different uid than the running process unless explicitly exempted. First fire failed with `git rev-parse` succeeding (no `.git` yet, unrelated reason) then `git init` succeeding, then the *second* `git rev-parse` call moments later (from `commitTrackedConfig`, called right after) failing with `fatal: detected dubious ownership`. Fixed by running `git config --global --add safe.directory <path>` (harmless here — the "attacker" and "victim" in the CVE this check guards against are the same developer's own container and host account) before every git operation touching a governed project, in both `config-integrity.ts`'s `commitFiles` and `harness-init.ts`'s `ensureGitRepo`.
+19. **NEW — a fresh `docker run --rm` container has no persistent `~/.gitconfig`, so `git commit` has no author identity** (found immediately after fixing item 18, same real fire, §12.6): `git commit` failed with "Please tell me who you are" — unit tests never caught this because they run on the host, which already has repo-local `user.name`/`user.email` configured. Fixed by passing `-c user.name=harness-os -c user.email=harness-os@localhost` inline on the commit invocation itself (not written to global config) — these are machine-generated commits, so a fixed bot identity is correct, with the real human already named in the message body via `verifiedBy`.
+20. **NEW — `recordVerifiedConfig`'s commit only covers the three CONST-CORE-004-tracked files, leaving the rest of a fresh `.claude/` scaffold permanently untracked** (found by inspecting `git status` after the item 18/19 fixes let a real commit finally succeed, §12.6): `AGENTS.md` and three of the four hook scripts (`check-harness-infra.sh`, `parse-tool-call.mjs`, `post-bash-revert.sh`) are outside `TRACKED_CONFIG_FILES`'s scope by design (§2.1 component 3 only ever meant to protect the CONST-CORE-004 enforcement files, not the whole scaffold), so they were never committed by anything. Not a security gap (`post-bash-revert.sh`'s revert backstop is also scoped to just those three files, so the untracked extras were never at risk of being deleted) but a real git-hygiene gap a fresh project shouldn't start with. Fixed by extracting `commitTrackedConfig`'s git logic into a reusable `commitFiles(fsPath, relFiles, message)` (exported from `config-integrity.ts`), and having `harness-init.ts` call it once for the whole `.claude/` directory right after scaffolding, before `recordVerifiedConfig` runs its own narrower commit (which then correctly no-ops with nothing new to commit for the three already-committed files).
 
 ---
 
@@ -653,7 +670,7 @@ as fixed-per-schema but not yet independently reproduced, not as proven the way 
     `harness-init.ts` MUST call `recordVerifiedConfig` (not write `.claude/` and commit separately) or
     this invariant breaks again the moment it's built.
 
-### 12.3 What's explicitly NOT done yet (so this doesn't read as more complete than it is)
+### 12.3 What's explicitly NOT done yet as of Phase 1 (Phase 2's own "not done yet" items are in §12.4)
 
 - `SKILLS.md` / `AGENTS.md` (§1.3) — still has its ⛔ checkpoint; Phase 1 never touched these files, and
   that checkpoint should be honored when Phase 3 (scaffold stamping) gets there, not skipped.
@@ -695,9 +712,492 @@ as fixed-per-schema but not yet independently reproduced, not as proven the way 
   not the same claim, and that a running long-lived container doesn't pick up a source fix until it's
   rebuilt and recreated.
 
+### 12.4 Phase 2 — verification record
+
+**Part A (Specification Registry) — done.** `specs/schema/{product,domain,api,data,infra}.schema.json`
+(JSON Schema 2020-12, via the `Ajv2020` class — plain `Ajv` only bundles draft-07) +
+`templates/*.example.json`, `db/init/0002_specs.sql` (`specs` with a partial unique index enforcing "at
+most one active version per spec_id", `spec_dependencies`), `packages/core/src/specs.ts`
+(`createSpec`/`getActiveSpec`/`listSpecs`/`impactAnalysis`/`findTransitiveDependents`/
+`enumerateStateMachineTestCases`), `server/src/tools/{create-spec,validate-spec,impact-analysis}.ts`.
+Two real bugs found via a manual MCP round trip against the running server (not by a pre-existing unit
+test): an Ajv validator-cache race (concurrent first-time compiles of the same schema `$id` threw
+"already exists" — fixed by caching the in-flight `Promise<ValidateFunction>` synchronously, before any
+`await`, instead of the resolved value) and missing `dependsOn` wiring (`addSpecDependency` existed but
+nothing called it). Both reproduced as unit tests, fixed, and re-verified against a rebuilt image. 89
+tests at Part A's checkpoint.
+
+**Part B (Verification Gates + Traceability Graph) — done.** New files: `db/init/0005_traceability.sql`
+(`traceability_edges`, UPDATE-able unlike `decisions`/`config_checksums` since stale-propagation flips a
+flag on existing rows), `db/init/0009_test_runs.sql` (not in the original §5 sketch —
+`test_runs(id, project_path, command, phase, exit_code, created_at)`, append-only), `packages/core/src/
+{harness-config,test-runs,traceability,coverage}.ts`, `server/src/tools/{generate-tests,validate-coverage,
+request-review,trace-artifact}.ts`. Extended: `gates.ts` (TDD red-phase check), `directives.ts`
+(`requireRedPhaseDirective`, `requestReviewDirective`), `specs.ts` (`buildTestGenerationPlan`,
+stale-propagation on version bump), `scaffold/.claude/hooks/{parse-tool-call.mjs,enforce-gate.sh}`. 130
+tests total at Part B's checkpoint (unit + two real-Postgres integration suites via testcontainers).
+
+**Option 1 vs Option 2 — the decision and what it actually resolves.** Before implementation, two
+options were discussed for where TDD red-phase test execution happens: (1) host-side, via the
+checksummed `enforce-gate.sh`, or (2) daemon-side, inside per-project containers. You chose Option 1.
+Investigating *why* Option 2 wasn't viable turned up a concrete confirmation, not just a preference:
+`harness_gate_daemon` mounts every governed project **read-only** (`docker-compose.yml`'s
+`${HARNESS_PROJECTS_ROOT}:/workspaces:ro`) and its image (`node:22-slim`, this repo's own dependencies
+only) has no non-JS toolchain and no project-specific `node_modules` guarantee — it structurally cannot
+run an arbitrary project's real test command. Option 1 was the only one that could actually work, not
+just the one with a better security posture.
+
+**What Option 1 actually closes, and what it explicitly doesn't.** The load-bearing invariant, confirmed
+working via live-fire testing (see below): `enforce-gate.sh` — not Claude, not `gate-check.js` running
+inside the daemon — spawns the test command itself, host-side, and passes the *observed* exit code into
+`recordTestRun`. Claude's own identical Bash invocation still runs afterward unblocked, so it sees full
+test output as normal; the hook's copy exists purely to produce a trustworthy result. `recordTestRun`
+additionally cross-checks the reported command string against `harness.config.json`'s checksummed
+`testCommands` (CONST-CORE-004 tracks that file), rejecting anything that isn't the configured command or
+that command as a prefix followed by a space — a prefix match, so it accepts legitimate scoping (a
+trailing test-file path) but can't distinguish that from an appended `|| true` or `; exit 0`, which would
+flow through the sanctioned hook path and record a false green. Named as the same accepted risk class as
+the paragraph below, not closed. **What this does not close** (named explicitly, not
+glossed over, matching the posture already established for the Bash-write heuristic and for
+`package.json`'s own test script being editable): a determined Claude could still construct
+`docker exec harness_gate_daemon node cli/dist/gate-check.js --mode record-test-run --command "<the real
+configured command>" --exit-code 1` directly via its own Bash tool, without ever having run that command,
+since `gate-check` has no way to cryptographically prove *who* produced a given exit code — only that the
+claimed command matches the checksummed config. This is a deliberate scope boundary, not an oversight:
+closing it fully would require either daemon-side execution (ruled out above) or new infrastructure
+(e.g. a per-invocation signed attestation) disproportionate to the threat model of a solo-developer
+setup. The mitigating factor is that this bypass is conspicuous — a hand-crafted `docker exec ... 
+record-test-run` call is a large, auditable deviation from normal tool use, not a one-line lie in chat,
+and every recorded run's `command` field is itself part of the decision log for forensic review.
+
+**Two additional hardenings adopted, both cheap, neither closing the gap above:**
+- **Red-before-green invariant**: `recordTestRun` rejects a `green` result unless the *most recently
+  recorded* run for the project was `red` — ties the two ends of a TDD cycle to the same observation
+  sequence, so green can't be recorded without an intervening red, and the gate re-closes after every
+  green (verified live below). Deliberately not framework-specific failing-test-*count* tracking (e.g.
+  "3 failing -> 0 failing"), which would require parsing per-runner output formats — judged not worth the
+  fragility for what it would add on top of the phase-sequencing check.
+- **120s timeout** on the hook's own verification run (`enforce-gate.sh`), so a hung test command can't
+  stall a PreToolUse hook — and therefore Claude Code itself — indefinitely. A timeout is recorded as a
+  (possibly spurious) RED, a known, documented imprecision rather than a silent hang.
+
+**Named, not closed, residual imprecision in the gate itself** (Open Item #14): the red-phase check only
+looks at the project's *most recent* `test_runs` row — it has no way to confirm the failing test is
+related to the file being written. A project that's already red for an unrelated reason opens the gate
+for any implementation write with no real enforcement. Precise spec-to-file linkage needs
+`workflow_runs.spec_id`, which is Phase 3 territory (the Workflow Engine), not something to backfill into
+Phase 2's coarser, project-wide gate.
+
+**Spec-version stale propagation — tested against real state change, not query text.** `createSpec`'s
+supersede branch now calls `markEdgesStaleForEntity(client, 'spec', String(oldRow.id))` inside the same
+transaction as the version bump. Rather than asserting "the UPDATE ran" against a mocked pool (which
+would pass even if the query typed the id wrong against `traceability_edges`' TEXT columns and silently
+matched zero rows), `specs.integration.test.ts` runs the real migrations against a `testcontainers`
+Postgres, records a real edge, bumps the spec, and asserts the edge's `stale` column actually flipped —
+plus a second test confirming an unrelated edge is untouched.
+
+**Script-level verification (synthetic payload) — done. Real in-session fire — not done yet.** Part B's
+red-phase gate was verified against the real, rebuilt Docker image and a throwaway project
+(`~/projects/harness-part-b-live-test`, cleaned up afterward — checksums, decisions, and test_runs rows
+deleted from Postgres, project directory removed): a synthetic PreToolUse Bash payload piped into the
+actual `enforce-gate.sh` script (not just `gate-check.js` directly) correctly intercepted a command
+matching the configured `testCommands` entry, ran it host-side, and recorded the real exit code. Full
+cycle confirmed: `Write` to a `gatedGlobs` file blocked (`establish_red_phase`) before any run → hook
+records RED → `Write` passes → hook records GREEN (same command string, parameterized via a side-channel
+file rather than editing the checksummed `harness.config.json` mid-test, which would have tripped
+config-integrity drift and produced a false signal) → `Write` blocked again, confirming the gate re-closes
+after green rather than staying open indefinitely.
+
+This is the same category of test §12.1 called its own "live-fire test" — a hand-crafted but realistically
+shaped payload run directly against the script, not a real Claude Code session, and it was **not**
+equivalent to §12.3's real, in-session Claude-Code-triggered fire.
+
+**Real, in-session fire — done, via `claude -p` against a throwaway project (Open Item #16).** Rather than
+asking the user to interactively restart a session (§12.3's original mechanism), `claude -p` was smoke-tested
+first (headless, no auth/permission hang) and then used to drive a genuine, separate Claude Code process
+rooted at `~/projects/harness-partb-realfire` — its own `settings.json` parse, its own PreToolUse hook
+invocation, its own `enforce-gate.sh` execution, not this session's. The project was config-verified via
+`recordVerifiedConfig` first (so the integrity gate passes and the red-phase gate — Part B's actual new
+logic — is what gets exercised, not the older `run_harness_init` path), with `gatedGlobs` matching a real
+target file and a test command controlled by a side-channel exit-code file so RED/GREEN could be toggled
+without touching the checksummed `harness.config.json`.
+
+**It caught a real bug, exactly as §12.3 predicted a real fire would.** `gates.ts`'s red-phase check called
+`classifyFile` with the raw `tool_input.file_path` from the hook payload — always an **absolute** path in a
+real session — against globs written relative to the project root (`"src/**/*.ts"`). `minimatch` never
+matches an absolute string against that pattern, so the gate silently gated nothing: the first real fire
+wrote straight through with zero test runs recorded, no block at all. Every existing test in
+`gates.test.ts`, and the synthetic payload used for the "script-level" verification above, had used a
+relative path for convenience — the exact blind spot §12.3 warned about, bugs living in the gap between the
+script's internal logic and Claude Code's real hook-invocation plumbing. Fixed by relativizing
+`input.filePath` against `input.projectPath` in `gates.ts` (`node:path`'s `relative()`) before calling
+`classifyFile`. TDD discipline followed even for this post-hoc fix: a regression test using an absolute
+path was added to `gates.test.ts` first, confirmed RED against the unfixed code, then the fix made it
+green. 131 tests total after this fix.
+
+**Re-verified against ground truth after the fix, not the nested session's own narration** (Postgres
+`test_runs` rows and the actual filesystem): `Write` blocked with `establish_red_phase` (zero test runs
+recorded) → asked to create the file, Claude ran the configured test command itself, the hook recorded a
+real RED (`exit_code=1`) → the same write retried and succeeded, file present on disk → asked to run the
+tests again, hook recorded a real GREEN (`exit_code=0`) → a second gated write blocked again (the process
+timed out retrying, since the fixture's side-channel had no way to produce a fresh RED on demand — expected
+behavior given the fixture, not a bug). Full cycle confirmed live. Throwaway project, `config_checksums`,
+`decisions`, and `test_runs` rows all cleaned up afterward.
+
+**Double execution, watched for and not an issue here:** this design runs the project's test command once
+inside the hook (to observe the trustworthy exit code) and Claude runs it again itself in its own
+subsequent Bash call (to see the output). For the side-channel-file fixture used here both runs are
+idempotent, so this wasn't exercised under a genuinely stateful suite (DB fixtures, a bound port, generated
+files) — still worth watching the first time this runs against a real project with such a suite.
+
+**Post-implementation review pass (before check-in), two small fixes:** (1) `recordTestRun`'s
+red-before-green check and `getLatestTestRun` both ordered by `created_at DESC LIMIT 1` with no tiebreak —
+two rows landing in the same timestamp tick made "latest" non-deterministic, which for a state machine
+keyed on "most recent phase" could leave the gate open when it should close. Added `, id DESC` as an
+explicit tiebreak in both queries. (2) The command cross-check's doc comment overclaimed what the prefix
+match actually protects against — it said it "matches...with scoping arguments appended," which reads as
+though scoping is the only thing a trailing string could be; reworded to say plainly that a prefix match
+can't distinguish a legitimate scoping path from an appended `|| true`, and named as the same accepted risk
+class as the docker-exec bypass rather than presented as closed. Docker image rebuilt and
+`harness_gate_daemon` recreated after both fixes; full 130-test suite and `tsc --build` still clean.
+
+**Discovered in the same pass, unrelated to Part B's own logic** (Open Item #13): the runtime Docker
+image has no `git` binary, so `config-integrity.ts`'s `commitTrackedConfig` — which runs inside
+`harness_gate_daemon` for every CLI subcommand dispatched via `docker-entrypoint.sh`, not just
+`gate-check` — always fails with `ENOENT` and is silently absorbed by the same catch-all as "not a git
+repo" (Open Item #9). The checksum row itself is unaffected (this only breaks the auto-commit
+convenience), but it affects every project, not just non-git ones. Pre-existing since Phase 1; deferred
+to Phase 3 (`harness-init.ts` inherits it the moment it calls `recordVerifiedConfig`) since it's outside
+Option 1/Part B's scope.
+
 ---
 
-Phase 1 shipped: constitution + risk engine + decision/audit log + the 4-component enforcement
-mechanism, tested and verified end-to-end (§12.1). Next step, on your go-ahead: Phase 2
-(Specification Registry + Verification Gates + Traceability Graph, §4–§5), starting with
-`specs/schema/*.schema.json` and `db/init/0002_specs.sql`.
+### 12.5 Phase 3, part A — Workflow Engine — verification record
+
+**Design decision surfaced to the user before writing code, per plan §6's own open item #7 ("how Claude
+fetches step N+1 — decide at implementation time").** Two shapes were on the table: return the whole
+directive sequence up front and trust Claude to walk it faithfully, or make the server authoritative —
+`run_workflow` returns one directive at a time, and `workflow_status` advances only after checking real
+evidence for the current stage. The user chose **server-authoritative**, matching every other spine already
+built in this system (append-only decisions, host-observed test runs, the gate re-closing on green) — all
+of which already distrust self-report over server state. Returning the whole sequence and hoping a review or
+approval stage doesn't get silently skipped would have been the one piece of this system that didn't hold
+itself to that standard.
+
+**What got built.** `db/init/0006_workflow_runs.sql` (`workflow_runs(id, workflow_name, spec_id,
+project_path, status, current_stage, stage_started_at, pending_decision_id, started_at, completed_at)` —
+UPDATE-able, unlike the append-only tables, since this is "where is this run right now," not a log; the
+actual audit trail for what happened at each stage still lives in `decisions`). `packages/core/src/
+{workflow-runs,workflow-definitions,workflows}.ts`: `workflow-runs.ts` is the raw persistence layer;
+`workflow-definitions.ts` defines the three workflows from plan §6 as ordered stage lists, each stage
+pairing a real `isComplete` check against a `directive` function; `workflows.ts` is the two functions the
+MCP tools call (`runWorkflow` starts a run and returns stage 1's directive; `workflowStatus` re-checks the
+*current* stage's evidence on every call and advances at most one stage — it never trusts a prior call
+already confirmed completion, so a stale result can't skip a stage). Two new MCP tools, `run_workflow` and
+`workflow_status`, registered in `server/src/index.ts`. Three workflow docs (`workflows/{new-feature,
+security-change,hotfix}.md`) documenting the exact stage/evidence table each workflow implements — not just
+plan §6's original prose sketch. 152 tests total (was 131 at the end of §12.4): 5 for `workflow-runs.ts`
+persistence (fake-pool unit tests, mirroring `gates.test.ts`'s style), 12 for `workflow-definitions.ts`'s
+stage logic, 3 for the two new MCP tools, and one real-Postgres integration test
+(`workflows.integration.test.ts`, `testcontainers`) walking the entire `hotfix` workflow end to end against
+real `workflow_runs`/`decisions`/`risk_assessments` rows — chosen over a mocked-pool test for the same reason
+`specs.integration.test.ts` was (plan §12.4): a fake pool asserting "the right query ran" would pass even if
+a stage's real evidence check silently matched zero rows.
+
+**Stage-completion evidence, concretely — real checks reused wherever a real backing table already exists,
+self-report named explicitly wherever one doesn't:**
+- `spec` → `getActiveSpec` returns non-null for the run's `spec_id` (real).
+- `risk` → a `risk_assessments` row exists for the project since the stage started, optionally floored to a
+  minimum level (`security-change` requires High/Critical — a floor Claude must actually hit via a real
+  `assess_risk` call, never an override the engine silently applies) (real).
+- `tests` → `getLatestTestRun` returns `phase: 'red'` — reuses Phase 2's host-observed red-phase check
+  directly, not a new self-report surface (real).
+- `review` → a `decisions` row with `action = "request_review"` exists — reuses the `request_review` tool's
+  own `recordDecision` call (real).
+- `approval` → reuses Phase 1's human-ack mechanism directly: Claude calls `record_decision` itself
+  (`status: 'pending_approval'`), reports the resulting id back via `workflow_status({ run_id, decision_id
+  })`, which persists it onto the run so the stage can call the existing `isDecisionApproved` (real, and no
+  new approval-tracking mechanism invented).
+- `trace` → a `traceability_edges` row exists for the project since the stage started (real).
+- `implement`, `security_review`, `finalize` → **self-report**: a `decisions` row with a workflow-and-stage-
+  scoped action string (`workflow:<name>:<stage>`) recorded via `record_decision`. Named explicitly, not
+  glossed over: there is no artifact "implementing a feature" or "finalizing a run" produces that the server
+  could check independently the way it checks a spec row or a host-observed test run — the same accepted
+  risk class as `validate_coverage`'s trusted percentage (§12.4, Open Item #15), not a new kind of gap.
+
+**Verified against the real running server, not just tests** (matching how Phase 2 Part A was verified,
+per the same reasoning §12.4 used to distinguish a real fire from a synthetic one — these are MCP tools, not
+hooks, so the equivalent real-world check is a genuine MCP round trip, not `claude -p`): a real
+`docker run harness-os:latest mcp-serve` was driven over stdio with hand-written JSON-RPC —
+`initialize` → `tools/call run_workflow` (started a real `hotfix` run, confirmed via `SELECT ... FROM
+workflow_runs` in Postgres) → `tools/call assess_risk` in a separate invocation (avoiding a real race
+surfaced by the first attempt: concurrent stdio requests can complete out of order, so a `workflow_status`
+call issued in the same batch as `assess_risk` isn't guaranteed to see it committed yet — not a server bug,
+a reminder that MCP request ordering isn't FIFO) → `tools/call workflow_status`, which correctly advanced
+the run from `risk` to `approval` and returned the `record_pending_approval` directive. `workflow_status`
+called with a nonexistent `run_id` returned a structured `workflow_run_error`, not a thrown exception.
+Throwaway `workflow_runs`/`risk_assessments` rows cleaned up afterward.
+
+**Deliberately deferred to Phase 3 part B or later, not silently missing:**
+- Open Item #13 (no `git` in the runtime image) is now genuinely due, not just flagged — `harness-init.ts`
+  (part B) will call `recordVerifiedConfig`, whose `commitTrackedConfig` still no-ops on `ENOENT`. Fix is the
+  one-line `RUN apt-get install -y git` this was deferred for.
+- The throwaway-project + `claude -p` harness built for §12.4's Open Item #16 fire is the natural end-to-end
+  test for `harness init` itself once it exists (does a freshly-stamped project's hooks actually fire?) —
+  reuse it rather than building a new verification harness for part B.
+- `security-change.md` and `hotfix.md` each name their own open gaps honestly (which `orch-*` skill a
+  security fix should route through; what "limited approval" was actually meant to bound) rather than
+  silently picking an answer and presenting it as settled.
+
+### 12.6 Phase 3, part B — Per-Project Scaffold (`harness init`) — verification record
+
+**Two things had to be settled with the user before writing code, called out by `advisor()` before
+implementation started, not discovered partway through.**
+
+First, the execution model. §12.5 had already flagged Open Item #13 as "genuinely due" once part B started —
+but building it surfaced that installing `git` alone wasn't sufficient. Empirically confirmed first:
+`docker exec harness_gate_daemon sh -c "touch /workspaces/x"` fails with `Read-only file system` — the
+daemon's `/workspaces` mount (§2.3) is deliberately `:ro`, a security property (the daemon can't be coerced
+into writing to governed projects), not something to relax. `harness-init.ts` needs to write `.claude/`,
+`git init`/commit, and record a Postgres row in one command — no single existing invocation model
+(`docker exec` into the daemon, or a host-native process with no DB access) can do all three. Resolved by
+invoking `harness-init` via its own ephemeral, writable-mount `docker run`, mirroring `mcp-serve`'s pattern
+(§2.3) rather than `gate-check`'s `docker exec` pattern:
+```
+docker run --rm -i --network harness_os_default \
+  --user "$(id -u):$(id -g)" -e HOME=/tmp \
+  -v <project-path>:<project-path> \
+  -e DATABASE_URL=postgres://harness_app:harness_app@harness_postgres:5432/harness_os \
+  harness-os:latest harness-init --project-path <project-path> [--prefix <PREFIX>]
+```
+No `HARNESS_WORKSPACES_ROOT`/`HARNESS_HOST_PROJECTS_ROOT` env vars set for this invocation — same
+ambient-passthrough behavior `project-path.ts`'s `resolveProjectFsPath` already has for `mcp-serve`, since the
+mount is at the identical host path. `--user`/`-e HOME` were added after a post-implementation review caught
+that the first version of this command (root, no `--user`) leaves every file it creates root-owned on the
+host — see §12.6a, Open Item #21.
+
+Second, §1.3's checkpoint. Plan §7 says `harness-init.ts` substitutes "stack-specific reviewer names (§1.3)"
+into stamped files, but §1.3's draft `AGENTS.md` is hardcoded to ApexTrade's specific stack (FastAPI/React) —
+not generic, and `harness-init.ts` is meant to run against any project. Asked the user directly rather than
+picking silently: generalize into a mechanical stack→known-reviewer-agent-name table (no new content
+invented, so no sign-off needed), confirm the ApexTrade draft verbatim (correct for ApexTrade, wrong for
+everything else), or skip reviewer-name stamping entirely for v1. User chose to generalize (Open Item #2).
+
+**What got built.** `packages/core/src/stack-detection.ts` — `detectStack(projectPath)` sniffs
+`package.json`/`pyproject.toml`/`requirements.txt`/`go.mod`/`Cargo.toml`/`db/**/*.sql` (no `project-init`
+skill invocation — a headless CLI can't call a Claude skill, an accepted boundary, not a shortcut); pure
+`buildScaffoldDefaults(stack)` maps the result to `gatedGlobs`/`testGlobs`/`testCommands` and a reviewer-agent
+list, always including the cross-cutting `code-reviewer`/`tdd-guide`/`architect` trio plus stack-specific
+names (`typescript-reviewer`/`react-reviewer`, `python-reviewer`/`fastapi-reviewer`/`django-reviewer`,
+`go-reviewer`, `rust-reviewer`, `database-reviewer` on a detected `db/*.sql` signal) — every name already
+exists in the ECC agent roster, none invented. `cli/src/harness-init.ts` — TTY-gated like `harness
+approve`/`harness reconcile-config` (§2.1, §3.5a: this establishes the root of the config-integrity trust
+chain, so it must be a human decision, architecturally unreachable by Claude Code's own Bash tool), refuses
+to re-initialize an already-initialized project (points at `reconcile-config` instead), prompts for
+confirmation showing the detected stack, then copies `scaffold/.claude/{hooks,settings.json}` verbatim,
+stamps `harness.config.json` with the detected defaults plus a `specPrefix` field (derived from the directory
+name if `--prefix` isn't given), writes `.claude/agents/AGENTS.md` from the reviewer list, `git init`s the
+target if it isn't already a repo, and calls `recordVerifiedConfig` to establish the checksum baseline.
+`server/Dockerfile` gained `RUN apt-get install -y git` in the runtime stage and `COPY scaffold scaffold` (the
+image never bundled `scaffold/.claude/` before — nothing needed to read it until now). 30 new tests (182
+total, was 152 at the end of §12.5): 20 for `stack-detection.ts` (real temp-dir fixtures for `detectStack`,
+pure-function tests for `buildScaffoldDefaults`), 9 for `harness-init.ts` (mocks `createPool`/
+`recordVerifiedConfig`/`verifyConfigIntegrity` from `@harness-os/core` while letting `detectStack`/
+`buildScaffoldDefaults` run for real against a real temp dir, matching the project's general preference for
+real behavior over mocks wherever the real thing is cheap and available), plus one new regression case added
+to `config-integrity.test.ts` for the git-identity bug below.
+
+**Verified against real infrastructure, not just tests — and this is where it earned its keep.** Per
+`advisor()`'s explicit warning before implementation ("if you hand-assemble anything harness-init is supposed
+to produce, you're re-testing the manual path, not the tool"): built the image, ran the real ephemeral
+`docker run harness-init` command above against a fresh throwaway project under `~/projects/`, confirmed via
+direct filesystem/git/Postgres inspection (not the command's own stdout) that `.claude/` was stamped
+correctly, `config_checksums` held real rows, and the git history was clean — then ran a real `claude -p`
+fire (via a small Python pty helper script, since `docker run -it` refuses a non-terminal stdin and this
+command is TTY-gated) against the freshly-scaffolded project, asking it to write a gated `.ts` file. Verified
+via ground truth exactly as the standing instruction requires: the nested session's own transcript said
+"created the file," but the real proof was `test_runs`/`decisions` rows in Postgres showing it was gated
+correctly — blocked, ran the configured test command twice to establish a real RED, then succeeded — the full
+chain (harness-init's stamped `gatedGlobs`, its checksums, `enforce-gate.sh`'s absolute-path fix from §12.4,
+and the red-phase gate) all working together, produced entirely by `harness-init.ts` itself with zero manual
+config assembly.
+
+This first real fire caught three genuine bugs in sequence, none reachable by a unit test since all three are
+properties of a real container running as root against a real host-owned bind mount — documented in full as
+Open Items #18–20:
+1. Git's dubious-ownership check (post-CVE-2022-24765) rejected every git operation on the mounted directory.
+2. Once fixed, the ephemeral container's `git commit` failed next — no persistent `~/.gitconfig` means no
+   author identity, and every unit test runs on a host that already has one.
+3. Once fixed, `git status` showed `AGENTS.md` and three of the four hook scripts as permanently untracked —
+   `recordVerifiedConfig`'s commit is deliberately scoped to only the three CONST-CORE-004 files, so nothing
+   else it copies was ever meant to be committed by that call.
+
+Each was fixed with the same TDD discipline as every prior real-fire bug in this project: reproduced first
+(the exact `git rev-parse`/`git commit` failure, run directly against the built image via `docker run
+--entrypoint sh`), fixed in `config-integrity.ts`/`harness-init.ts`, re-verified against the real container
+end to end after each fix, and only declared done once a completely clean fire — no warnings, a linear git
+history, `git status` empty — was reproduced from scratch against a brand-new throwaway project.
+
+**Deliberately deferred, not silently missing:**
+- `reconcile-config` still runs via `docker exec harness_gate_daemon` (the read-only-mount model) and so
+  still can't actually commit its own re-verified config — named as the second half of Open Item #13 rather
+  than fixed in this pass, since migrating its invocation model is a separate, distinct change from
+  `harness-init.ts`'s own scope.
+- §1.3's original ApexTrade-specific `AGENTS.md`/`SKILLS.md` draft is still unconfirmed — the generalized
+  mechanical mapping resolves what `harness-init.ts` needed, not the draft itself, which stays open for
+  Phase 4.
+- Throwaway verification projects and their `~/.claude.json` trust-dialog entries were cleaned up after
+  (root-owned `.claude`/`.git` contents from running as root required a throwaway `docker run alpine rm -rf`
+  rather than a plain host `rm -rf`, itself a small real-world consequence of the same root-vs-host-uid
+  mismatch behind Open Item #18).
+
+### 12.6a Post-implementation review — three more real bugs, caught before check-in
+
+`advisor()` was called once more after §12.6's "fully done" self-assessment and before reporting completion to
+the user, per the standing practice of consulting it before declaring a task finished. It found the completed
+work self-consistent but flagged that the real-fire verification in §12.6 had passed only because *the person
+running it* (this session) applied workarounds — `safe.directory`, an inline bot identity, an `alpine rm -rf`
+for cleanup — that an actual user would never know to apply. That was a real signal, not noise: it meant a
+property of the *delivered command*, not just the verification process, was untested. Two concrete findings,
+both confirmed empirically before being treated as real:
+
+1. **Open Item #21 — root-owned scaffold (blocking).** Every file `harness-init` creates
+   (`.claude/`, `.git/`) was owned by `root` on the host, because the ephemeral `docker run` in §12.6 never
+   set `--user`. Confirmed with `ls -la` after a real fire (`-rw-r--r-- 1 root root ...`) and by reproducing
+   the failure a plain host user hits next: `touch .claude/settings.json` and `git commit` both fail outright
+   without a `sudo` or `safe.directory` workaround the user was never told to apply — directly contradicting
+   §2.1 component 3's own stated design constraint that the tracked config files "have to stay writable, since
+   legitimate config changes are normal." Fixed by adding `--user "$(id -u):$(id -g)" -e HOME=/tmp` to the
+   documented invocation (now reflected above). Re-verified with a fresh real fire: files land host-owned
+   (`-rw-r--r-- 1 lehoa lehoa ...`), and the host user can `git commit`/edit `.claude/settings.json`
+   immediately afterward with zero workarounds. The `safe.directory` exemption in `commitFiles`/`ensureGitRepo`
+   was left in place as defense-in-depth (covers a project already owned by some third uid), but is no longer
+   load-bearing for the common case, since the container's uid now matches the mount owner exactly.
+
+2. **Open Item #22 — `reconcile-config` crash on the read-only mount (real regression, not pre-existing) —
+   and a second-pass correction after the first fix was itself incomplete.** Installing `git` in the runtime
+   image (§12.6, for `harness-init`'s sake) changed `reconcile-config`'s failure mode without anyone touching
+   `reconcile-config.ts` itself. Before: no `git` binary meant `git rev-parse --is-inside-work-tree` itself
+   failed, `commitFiles` treated that as "not a repo," warned, and returned cleanly. After: `git` exists, so
+   `rev-parse` (a read) succeeds against the daemon's `:ro` mount, execution reaches `git add` (a write), which
+   throws with `EROFS` — uncaught, since `commitFiles` only ever wrapped the "not a repo" branch, and
+   `reconcile-config.ts`'s `main` has no try/catch around `recordVerifiedConfig`. The checksum row is inserted
+   *before* the doomed commit attempt, so an uncaught throw here would leave the DB and git HEAD diverged — the
+   exact split-brain `recordVerifiedConfig`'s own doc comment says commitTrackedConfig exists to prevent.
+   Reproduced directly (`chmod 555 .git` on a real repo: `rev-parse` still succeeds, `git add` fails with
+   `Unable to create .git/index.lock: Permission denied`), confirmed a new regression test failed against the
+   pre-fix code.
+
+   **First pass (insufficient, caught by a second `advisor()` call before check-in):** wrapped the `git
+   add`/`status`/`commit` sequence in `commitFiles` in its own try/catch, degrading to the same warn-only
+   posture as the "not a repo" branch. This stopped the crash but not the underlying split-brain — the checksum
+   row is inserted regardless of whether the commit lands, so `reconcile-config` would print "Config re-verified
+   and trusted" and exit 0 while git HEAD still held stale content. That's exactly `recordVerifiedConfig`'s own
+   documented failure mode (2): post-bash-revert.sh's next Bash call would revert the file back to the stale
+   HEAD content, which then mismatches the *new* DB hash and blocks every gated write. A crash was loud and
+   wrong; a silent "trusted" was quiet and just as wrong — it converted a loud failure into a silent wedge.
+
+   **Second pass (shipped):** `commitFiles`/`commitTrackedConfig`/`recordVerifiedConfig` now return whether the
+   commit actually succeeded (`{ committed: boolean }`) instead of `void`. `reconcile-config.ts` checks this and
+   refuses to report success when `committed` is `false`: it prints a specific explanation (DB is trusted, HEAD
+   is not, the next gated write may be reverted and then blocked) and exits `1`, pointing at the still-open
+   second half of Open Item #13 (migrate to a writable-mount invocation) as the real fix. `harness-init.ts` gets
+   the same check defensively, even though its own writable-mount commit is expected to always succeed. This
+   does not close Open Item #13's second half — a `reconcile-config` run on the daemon's read-only mount still
+   cannot actually commit — but it stops the command from *lying* about it. Re-verified with two real fires:
+   `harness-init` on the writable mount now prints no warning at all (clean commit, `committed: true`); the
+   same drift scenario run via `docker exec harness_gate_daemon` against the real `:ro` mount now exits `1`
+   with the explicit warning, instead of the first pass's exit `0` "Config re-verified and trusted."
+
+**A third, unrelated bug surfaced incidentally while re-verifying the daemon for finding #2, not originally in
+scope — fixed rather than left as a footnote, since it undermines the core `gate-check` invocation model.**
+
+3. **Open Item #23 — `gate-daemon.ts`'s heartbeat was `unref()`'d, so the daemon was never actually
+   persistent.** While recreating `harness_gate_daemon` to pick up the Open Item #22 fix, `docker inspect
+   --format '{{.RestartCount}}'` climbed from 0 to 1 within 8 seconds of a clean start, with no error in the
+   container logs (exit code 0). Root cause: `gate-daemon.ts`'s only job is to stay alive (§2.2's "warm
+   container avoids `docker run`'s cold-start" design), but its heartbeat `setInterval` was `unref()`'d —
+   telling Node not to count that timer when deciding whether the event loop has more work. With no server
+   socket and nothing else ref'd, the event loop drained and the process exited almost immediately after
+   startup. This had been invisible in every prior session: `db/docker-compose.yml` sets
+   `restart: unless-stopped` on this container, so it was being silently resurrected every few seconds the
+   entire time, and every previous `docker ps` check in this project's history happened to land inside one of
+   those brief "just restarted" windows, showing `Up N seconds` and looking healthy. Confirmed by recreating
+   the container both by hand (`docker run -d`, no restart policy: exited cleanly, `RestartCount: 0`, status
+   `Exited (0)` moments later) and via `docker compose up -d` (restart policy active: `RestartCount` visibly
+   incrementing). Fixed by removing the `.unref()` call — this interval is deliberately the only thing keeping
+   the daemon's event loop alive, so unref'ing it was always wrong for this specific process, not a tuning
+   choice. Re-verified with a real fire: `RestartCount: 0`, status `running`, sustained for 15+ seconds after a
+   fresh `docker compose up -d harness_gate_daemon`, and the read-only-mount `reconcile-config` fire for
+   finding #2 ran against this same daemon instance throughout without it ever restarting underneath the test.
+
+All three were fixed with the same discipline as Open Items #18–20: reproduced empirically first (never
+assumed from reading code alone), a regression test added and confirmed RED against the pre-fix code via `git
+stash` where a unit-testable repro existed (#22, #23), then GREEN after the fix, and a full real-infrastructure
+re-fire (rebuilt image, recreated both containers, re-ran the exact failing scenario) before being called
+resolved — and for #22 specifically, a *second* `advisor()` call caught that the first fix's real-fire
+verification had only checked "does it crash," not "does it now lie about success," which is what forced the
+`{ committed: boolean }` second pass. 186 tests total (was 182 in §12.6): one case in `config-integrity.test.ts`
+plus one each in `harness-init.test.ts` and `reconcile-config.test.ts` for #22's two passes, one case in
+`gate-daemon.test.ts` for #23.
+
+---
+
+Phase 1 + Phase 2 + Phase 3 (parts A and B) shipped: constitution + risk engine + decision/audit log + the
+4-component enforcement mechanism (Phase 1); the Specification Registry, TDD red-phase gate with host-side
+verified test execution, and traceability graph with stale-propagation (Phase 2); the server-authoritative
+Workflow Engine — `run_workflow`/`workflow_status`, three defined workflows, real-state stage advancement
+reusing Phase 1/2's own mechanisms wherever a backing table exists (Phase 3 part A); and now `harness-init.ts`
+— mechanical stack detection, a stamped `.claude/` scaffold with stack-appropriate gates and reviewer names,
+git init/commit, and `recordVerifiedConfig`, all as one TTY-gated command via its own ephemeral writable-mount
+`docker run` (Phase 3 part B). 186 tests, tsc-clean, verified against real Docker/Postgres throughout —
+including two manual MCP round trips in Phase 2 that caught real bugs unit tests alone missed, a real-Postgres
+integration test proving stale-propagation actually mutates state, a real, in-session `claude -p`-triggered
+fire that caught and fixed a genuine absolute-path relativization bug in the red-phase gate (§12.4, Open Item
+#16), a real MCP round trip confirming the workflow engine advances only on real evidence (§12.5), a real
+`docker run harness-init` fire followed by a real `claude -p` write that caught and fixed three genuine
+root-vs-host-uid git bugs in the same session before confirming the full stamped-scaffold-to-gated-write chain
+actually works end to end (§12.6, Open Items #18–20), and a post-implementation `advisor()` review that caught
+three more real bugs before check-in — root-owned scaffold files, a `reconcile-config` crash regression, and a
+`gate-daemon` liveness bug masked for the project's entire history by compose's restart policy (§12.6a, Open
+Items #21–23).
+
+### 12.6b `bin/harness` — human-facing wrapper script (closes Open Item #13's second half)
+
+Asked for directly by the user (not pre-specified in the plan): the raw `docker run`/`docker exec` invocations
+for `init`/`reconcile-config`/`approve` are long, easy to mistype, and this session had already mistyped
+variants of them repeatedly. `bin/harness` wraps all three:
+
+```
+bin/harness init <project-path> [--prefix PREFIX]
+bin/harness reconcile-config <project-path>
+bin/harness approve <decision-id>
+```
+
+`init` and `reconcile-config` use the same ephemeral, writable-mount, host-uid `docker run` established for
+`harness-init` in §12.6a (Open Item #21) — resolves the project path to an absolute path first, since `-v` and
+`--project-path` must agree exactly (`project-path.ts`'s ambient-passthrough assumption). `approve` only ever
+touches Postgres, never a project's filesystem, so it reaches the already-warm `harness_gate_daemon` via
+`docker exec` instead of paying a `docker run` cold start. All three keep the underlying commands' own TTY gate
+(§2.1, §3.5a) and add a friendlier pre-check (`[ -t 0 ]`) so a piped/non-interactive invocation fails with a
+harness-specific message before Docker's own less-obvious one.
+
+**Consequence, not just convenience: this closes Open Item #13's second half.** Routing `reconcile-config`
+through the same writable-mount model as `init` — instead of `docker exec harness_gate_daemon` against its
+read-only mount — means its git commit now actually succeeds. Verified with a real fire: `bin/harness init`
+against a fresh throwaway project, drifted `.claude/settings.json` by hand, `bin/harness reconcile-config`
+against the same project — exited 0 with no warning, and `git status --porcelain` came back clean (the commit
+landed), where the same scenario via `docker exec harness_gate_daemon` in §12.6a's verification exited 1 with
+the Open Item #22 warning. `reconcile-config.ts` itself was not touched — the fix is entirely in which
+invocation model a human is told to use.
+
+---
+
+Phase 3 (both parts) is now fully done, including the post-review hardening pass and the `bin/harness` wrapper.
+Remaining, per the plan's own checkpoint discipline: Phase 4 (ApexTrade retrofit, §9) has not been started and
+should not begin without explicit confirmation; §1.3's original ApexTrade-specific `AGENTS.md`/`SKILLS.md`
+draft is still unconfirmed (Open Item #2) — Phase 3 part B resolved what `harness-init.ts` itself needed by
+generalizing past it, not by confirming the draft. Open Item #13 is now fully closed (§12.6b) — both halves
+(no `git` in the image, and `reconcile-config`'s inability to commit) are resolved, and the MCP server itself
+is confirmed live in this environment (`mcp__harness-os__*` tools available, backed by two running `mcp-serve`
+containers).

@@ -46,7 +46,26 @@ export async function main(
     }
 
     const verifiedBy = process.env.USER ?? process.env.USERNAME ?? 'unknown-human';
-    await recordVerifiedConfig(pool, projectPath, verifiedBy);
+    const { committed } = await recordVerifiedConfig(pool, projectPath, verifiedBy);
+    if (!committed) {
+      // Open Item #22: this command still runs via `docker exec
+      // harness_gate_daemon` against its read-only `:ro` mount (Open Item
+      // #13's still-unmigrated half), so the commit above did not happen —
+      // the checksum row was still inserted, but git HEAD wasn't updated to
+      // match. Reporting success here would let post-bash-revert.sh's next
+      // Bash call revert the file back to stale HEAD content, which then
+      // mismatches the *new* DB hash and blocks every gated write
+      // (recordVerifiedConfig's own doc comment, failure mode 2). Refuse to
+      // claim success instead.
+      console.error(
+        'Checksums were re-verified and trusted in the database, but the git commit failed ' +
+          '(see the warning above) — .claude is now DB-trusted but not committed to HEAD. ' +
+          'The next gated write may be reverted and then blocked. Re-run this from a writable ' +
+          'mount of the project (not via harness_gate_daemon) to commit the change, or commit ' +
+          'the .claude changes manually.',
+      );
+      return 1;
+    }
     console.log('Config re-verified and trusted.');
     return 0;
   } finally {

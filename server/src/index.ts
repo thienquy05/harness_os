@@ -8,6 +8,15 @@ import { registerEvaluateGovernanceTool } from './tools/evaluate-governance.js';
 import { registerAssessRiskTool } from './tools/assess-risk.js';
 import { registerRecordDecisionTool } from './tools/record-decision.js';
 import { registerAuditReportTool } from './tools/audit-report.js';
+import { registerCreateSpecTool } from './tools/create-spec.js';
+import { registerValidateSpecTool } from './tools/validate-spec.js';
+import { registerImpactAnalysisTool } from './tools/impact-analysis.js';
+import { registerGenerateTestsTool } from './tools/generate-tests.js';
+import { registerValidateCoverageTool } from './tools/validate-coverage.js';
+import { registerRequestReviewTool } from './tools/request-review.js';
+import { registerTraceArtifactTool } from './tools/trace-artifact.js';
+import { registerRunWorkflowTool } from './tools/run-workflow.js';
+import { registerWorkflowStatusTool } from './tools/workflow-status.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -19,6 +28,15 @@ async function main(): Promise<void> {
   registerAssessRiskTool(server, pool);
   registerRecordDecisionTool(server, pool);
   registerAuditReportTool(server, pool);
+  registerCreateSpecTool(server, pool);
+  registerValidateSpecTool(server);
+  registerImpactAnalysisTool(server, pool);
+  registerGenerateTestsTool(server, pool);
+  registerValidateCoverageTool(server, pool);
+  registerRequestReviewTool(server, pool);
+  registerTraceArtifactTool(server, pool);
+  registerRunWorkflowTool(server, pool);
+  registerWorkflowStatusTool(server, pool);
 
   const transport = new StdioServerTransport();
   await server.connect(transport);

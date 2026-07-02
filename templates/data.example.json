@@ -1,0 +1,14 @@
+{
+  "id": "APX-DATA-001",
+  "title": "Orders Table",
+  "tables": [
+    {
+      "name": "orders",
+      "columns": [
+        { "name": "id", "type": "uuid", "constraints": ["primary key"] },
+        { "name": "symbol", "type": "text", "constraints": ["not null"] },
+        { "name": "status", "type": "text", "constraints": ["not null"] }
+      ]
+    }
+  ]
+}

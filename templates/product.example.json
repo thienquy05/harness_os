@@ -1,0 +1,8 @@
+{
+  "id": "APX-PROD-001",
+  "title": "ApexTrade Options Trading Platform",
+  "summary": "Retail options trading platform with live order execution via Alpaca.",
+  "goals": ["Sub-second order submission", "Real-time position tracking"],
+  "nonGoals": ["Supporting non-US markets in v1"],
+  "stakeholders": ["Trading desk", "Compliance"]
+}

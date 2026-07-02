@@ -44,11 +44,37 @@ describe('reconcile-config main', () => {
       initialized: true,
       mismatches: ['hooks/enforce-gate.sh'],
     });
+    vi.mocked(core.recordVerifiedConfig).mockResolvedValue({ committed: true });
     const { main } = await import('./reconcile-config.js');
     const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
     const code = await main(['--project-path', '/p'], true);
     expect(code).toBe(0);
     expect(core.recordVerifiedConfig).toHaveBeenCalledWith(expect.anything(), '/p', expect.any(String));
     logSpy.mockRestore();
+  });
+
+  it('refuses to report success when the commit did not actually happen (Open Item #22)', async () => {
+    // Regression: harness_gate_daemon's read-only mount means the commit
+    // inside recordVerifiedConfig can fail even though the checksum row was
+    // already inserted (Open Item #22). Silently printing "trusted" here
+    // would hide that the project is now DB-trusted but not committed to
+    // HEAD — one Bash call away from post-bash-revert.sh reverting the file
+    // and then blocking every gated write, since the reverted content no
+    // longer matches the new DB hash.
+    const core = await import('@harness-os/core');
+    vi.mocked(core.verifyConfigIntegrity).mockResolvedValue({
+      ok: false,
+      initialized: true,
+      mismatches: ['hooks/enforce-gate.sh'],
+    });
+    vi.mocked(core.recordVerifiedConfig).mockResolvedValue({ committed: false });
+    const { main } = await import('./reconcile-config.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const code = await main(['--project-path', '/p'], true);
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('git commit failed'));
+    logSpy.mockRestore();
+    errorSpy.mockRestore();
   });
 });

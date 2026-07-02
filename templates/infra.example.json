@@ -1,0 +1,17 @@
+{
+  "id": "APX-INFRA-001",
+  "title": "Order Execution Stack",
+  "components": [
+    {
+      "name": "api-gateway",
+      "type": "FastAPI service",
+      "description": "Handles order submission and routes to the execution engine."
+    },
+    {
+      "name": "execution-engine",
+      "type": "Python worker",
+      "description": "Submits orders to Alpaca and reconciles fills.",
+      "dependsOn": ["api-gateway"]
+    }
+  ]
+}

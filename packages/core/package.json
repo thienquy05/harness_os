@@ -9,6 +9,8 @@
     "build": "tsc --build"
   },
   "dependencies": {
+    "ajv": "^8.20.0",
+    "minimatch": "^10.0.1",
     "pg": "^8.13.1"
   },
   "devDependencies": {

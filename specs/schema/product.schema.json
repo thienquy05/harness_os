@@ -1,0 +1,16 @@
+{
+  "$id": "https://harness-os.local/schema/product.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Product Spec",
+  "type": "object",
+  "required": ["id", "title", "summary", "goals"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}-PROD-[0-9]{3,}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "summary": { "type": "string", "minLength": 1 },
+    "goals": { "type": "array", "items": { "type": "string", "minLength": 1 }, "minItems": 1 },
+    "nonGoals": { "type": "array", "items": { "type": "string", "minLength": 1 } },
+    "stakeholders": { "type": "array", "items": { "type": "string", "minLength": 1 } }
+  }
+}

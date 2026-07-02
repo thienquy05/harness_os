@@ -25,6 +25,14 @@ FROM node:22-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
+# git is required by config-integrity.ts's commitTrackedConfig, called from
+# every recordVerifiedConfig invocation (reconcile-config, and now
+# harness-init) — see plan Open Item #13. Installing it alone isn't
+# sufficient for the daemon (its /workspaces mount is read-only), but it is
+# necessary for harness-init's own writable-mount `docker run` invocation.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json ./
 COPY packages/core/package.json packages/core/
 COPY server/package.json server/
@@ -34,6 +42,16 @@ RUN npm ci --omit=dev
 COPY --from=builder /app/packages/core/dist packages/core/dist
 COPY --from=builder /app/server/dist server/dist
 COPY --from=builder /app/cli/dist cli/dist
+# Static schema data, not compiled — specs.ts resolves this path at runtime
+# relative to its own dist/src location (same directory depth in the image
+# as in the repo, see specs.ts's SCHEMA_DIR comment). Learned from Phase 1's
+# gate-daemon read-only-mount gap: anything the daemon touches must be baked
+# into the image or mounted, never assumed present on disk (plan §12.2).
+COPY specs/schema specs/schema
+# harness-init.ts reads scaffold/.claude/{hooks,settings.json} at runtime and
+# stamps them into a governed project — same "bake into the image" reasoning
+# as specs/schema above, resolved relative to its own dist location.
+COPY scaffold scaffold
 COPY server/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 

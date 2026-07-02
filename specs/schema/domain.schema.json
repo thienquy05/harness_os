@@ -1,0 +1,67 @@
+{
+  "$id": "https://harness-os.local/schema/domain.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Domain Spec",
+  "type": "object",
+  "required": ["id", "title", "entities"],
+  "additionalProperties": false,
+  "properties": {
+    "id": { "type": "string", "pattern": "^[A-Z][A-Z0-9]{1,9}-DOM-[0-9]{3,}$" },
+    "title": { "type": "string", "minLength": 1 },
+    "entities": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["name", "fields"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "fields": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["name", "type"],
+              "additionalProperties": false,
+              "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "type": { "type": "string", "minLength": 1 },
+                "required": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "stateMachines": {
+      "description": "Direct implementation of the 'Specifying State Transitions' pattern: transitions lists every VALID (from,to) pair explicitly. Anything not listed is invalid by omission — generate_tests emits one test per valid transition (must succeed) and one per invalid ordered pair not in the list (must be rejected).",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "states", "transitions"],
+        "additionalProperties": false,
+        "properties": {
+          "name": { "type": "string", "minLength": 1 },
+          "states": {
+            "type": "array",
+            "minItems": 2,
+            "items": { "type": "string", "minLength": 1 },
+            "uniqueItems": true
+          },
+          "transitions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["from", "to"],
+              "additionalProperties": false,
+              "properties": {
+                "from": { "type": "string", "minLength": 1 },
+                "to": { "type": "string", "minLength": 1 }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

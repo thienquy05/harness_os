@@ -17,12 +17,18 @@ export async function main(): Promise<void> {
   const pool = createPool();
   await pool.query('SELECT 1'); // fail fast at startup if DATABASE_URL is wrong
 
+  // Deliberately NOT unref'd: this interval is the only thing keeping the
+  // event loop (and therefore this process) alive. unref() previously caused
+  // the daemon to exit almost immediately after startup — invisible under
+  // docker-compose's `restart: unless-stopped`, which just kept
+  // resurrecting it every few seconds, defeating the "warm container" design
+  // this file exists for (§2.2). Confirmed via a real fire: RestartCount
+  // climbed from 0 to 1 within 8 seconds of a fresh start.
   const heartbeat = setInterval(() => {
     pool.query('SELECT 1').catch((error: unknown) => {
       console.error('harness_gate_daemon heartbeat query failed:', error);
     });
   }, HEARTBEAT_INTERVAL_MS);
-  heartbeat.unref();
 
   const shutdown = (): void => {
     clearInterval(heartbeat);

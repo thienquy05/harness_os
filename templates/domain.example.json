@@ -1,0 +1,27 @@
+{
+  "id": "APX-DOM-001",
+  "title": "Order Lifecycle",
+  "entities": [
+    {
+      "name": "Order",
+      "fields": [
+        { "name": "id", "type": "uuid", "required": true },
+        { "name": "symbol", "type": "string", "required": true },
+        { "name": "status", "type": "OrderStatus", "required": true }
+      ]
+    }
+  ],
+  "stateMachines": [
+    {
+      "name": "OrderStatus",
+      "states": ["Pending", "Authorized", "Settled", "Refunded", "Cancelled"],
+      "transitions": [
+        { "from": "Pending", "to": "Authorized" },
+        { "from": "Authorized", "to": "Settled" },
+        { "from": "Settled", "to": "Refunded" },
+        { "from": "Pending", "to": "Cancelled" },
+        { "from": "Authorized", "to": "Cancelled" }
+      ]
+    }
+  ]
+}

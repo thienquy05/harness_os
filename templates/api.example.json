@@ -1,0 +1,18 @@
+{
+  "id": "APX-API-001",
+  "title": "Order Submission API",
+  "endpoints": [
+    {
+      "method": "POST",
+      "path": "/api/v1/orders",
+      "description": "Submit a new order for execution.",
+      "authRequired": true
+    },
+    {
+      "method": "GET",
+      "path": "/api/v1/orders/{id}",
+      "description": "Fetch order status by id.",
+      "authRequired": true
+    }
+  ]
+}

@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx vitest *)",
+      "Bash(npx tsc *)",
+      "Bash(docker exec harness_gate_daemon node -e ' *)",
+      "Bash(docker.exe ps *)",
+      "Bash(docker version *)",
+      "Bash(docker.exe info *)",
+      "Bash(docker exec *)",
+      "Bash(rm -f ~/projects/harness-partb-realfire/src/example.ts)",
+      "Read(//home/lehoa/projects/harness-partb-realfire/**)",
+      "Bash(timeout 90 claude -p \"Create a file at src/example.ts containing exactly: export const greeting = 'hello';\")",
+      "Bash(echo \"---exit:$?---\")",
+      "Bash(python3 -c ' *)",
+      "Bash(docker build *)",
+      "Bash(docker exec harness_postgres psql -U harness_admin -d harness_os -c \"SELECT project_path, file_path, verified_by FROM config_checksums WHERE project_path='/home/lehoa/projects/harness-partb-init4';\" *)",
+      "Read(//home/lehoa/projects/harness-partb-init4/.claude/**)",
+      "Read(//home/lehoa/projects/harness-partb-init4/**)",
+      "Bash(timeout 90 claude -p \"Write a file at src/example.ts containing: export const x = 1;\" --output-format json)",
+      "Bash(docker rm *)",
+      "Bash(docker run *)",
+      "Bash(HARNESS_PROJECTS_ROOT=/home/lehoa/projects docker compose up -d harness_gate_daemon)"
+    ]
+  }
+}

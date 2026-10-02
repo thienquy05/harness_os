@@ -180,4 +180,24 @@ describe('harness-init main', () => {
     const { stdout: logOutput } = await execFileAsync('git', ['log', '--format=%s'], { cwd: projectPath });
     expect(logOutput).toContain('harness: initial project scaffold');
   });
+
+  it('scaffolds the hook scripts as executable (Claude Code runs them directly, not via bash)', async () => {
+    // Regression: the scaffold source files were committed as 100644, so
+    // fs.cp (which preserves source mode) scaffolded every project's hooks
+    // as non-executable. Claude Code invokes the PreToolUse/PostToolUse/
+    // SessionStart hooks directly, so a non-executable script fails with
+    // EACCES — treated as a warning, which silently disabled the gate.
+    mockReadline('y');
+    const { main } = await import('./harness-init.js');
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const code = await main(['--project-path', projectPath], true);
+    expect(code).toBe(0);
+    logSpy.mockRestore();
+
+    const { stat } = await import('node:fs/promises');
+    for (const script of ['check-harness-infra.sh', 'enforce-gate.sh', 'post-bash-revert.sh']) {
+      const mode = (await stat(join(projectPath, '.claude', 'hooks', script))).mode;
+      expect(mode & 0o111).not.toBe(0);
+    }
+  });
 });

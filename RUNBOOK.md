@@ -99,3 +99,43 @@ SELECT id, rationale FROM decisions WHERE status = 'pending_approval';
 ```
 
 against `harness_postgres`.
+
+**`harness_postgres` was created before the latest `db/init` or `db/seed` files.**
+Init scripts run only on an empty data directory, so an older database can lack
+tables (`test_runs` made every gated check crash) or the constitution seed
+(`get_constitution` says "No constitution version found"). Apply each missing
+file once, as the container's admin user:
+
+```bash
+docker exec -i harness_postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < db/init/0009_test_runs.sql
+docker exec -i harness_postgres sh -c 'psql -v ON_ERROR_STOP=1 -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < db/seed/seed_constitution_v1.sql
+```
+
+## What the gate does and does not stop
+
+The hooks are a guardrail for an agent that works in the open, not a sandbox:
+they run as the same user as the agent.
+
+Stopped or flagged:
+- A Write, Edit or recognized Bash write (`>`, `>>`, `sed -i`, `tee`) to a
+  `gatedGlobs` file before harness-os has itself seen a failing test run.
+- Any other Bash command that changes a gated file while the gate is closed:
+  flagged to the agent and logged as `flag_ungated_bash_write`, not reverted
+  (a revert could lose work). Committing the change in the same command does
+  not hide it; a checkout of a commit that already existed does not count.
+- A Bash command that changes a tracked config file (content, mode, symlink or
+  hard link) so that it no longer verifies: restored to its state before the
+  command; what was found is kept in `.git/harness-bash/quarantine/`.
+- Test runs that did not complete (not runnable, or stopped after
+  `HARNESS_TEST_TIMEOUT_SECONDS`, default 120) are not recorded.
+
+Known residual risks:
+- A fabricated direct `docker exec harness_gate_daemon node cli/dist/gate-check.js
+  --mode record-test-run --exit-code 1` call records a RED that no test
+  produced (plan §12.3). Nothing on the same machine can rule that out.
+- A deliberate filesystem attack by the same user (racing the hooks, changing
+  files outside a Bash call, editing `.git/harness-bash`) is out of scope.
+- The time limit stops the test command itself; processes it started can
+  outlive it.
+- A `git pull` that fetches new commits while the gate is closed is flagged
+  (noise, nothing is changed).

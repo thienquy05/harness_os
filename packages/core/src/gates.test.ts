@@ -121,11 +121,22 @@ describe('checkGate', () => {
     expect(result.pass).toBe(true);
   });
 
-  it('does not apply the red-phase gate to Bash calls, only Edit/Write', async () => {
+  // A Bash call whose write target parse-tool-call.mjs recognized (`>`, `sed -i`, `tee`) writes the
+  // file just like Write/Edit, so it gets the same red-phase gate (Codex review, Vegenus 2026-10-29).
+  it('applies the red-phase gate to a Bash call with a recognized gated write target', async () => {
     const { pool } = fakePool({});
     await seedProjectFiles(projectPath, '{"gatedGlobs":["src/**/*.ts"]}');
     await recordVerifiedConfig(pool, projectPath, 'test-human');
     const result = await checkGate(pool, { projectPath, tool: 'Bash', filePath: 'src/foo.ts' });
+    expect(result.pass).toBe(false);
+    expect(result.directive?.action).toBe('establish_red_phase');
+  });
+
+  it('passes a Bash call with no recognized write target', async () => {
+    const { pool } = fakePool({});
+    await seedProjectFiles(projectPath, '{"gatedGlobs":["src/**/*.ts"]}');
+    await recordVerifiedConfig(pool, projectPath, 'test-human');
+    const result = await checkGate(pool, { projectPath, tool: 'Bash' });
     expect(result.pass).toBe(true);
   });
 

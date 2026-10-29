@@ -27,6 +27,8 @@ process.stdin.on('end', () => {
     `HARNESS_FILE_PATH=${shellEscape(filePath)}`,
     `HARNESS_BASH_COMMAND=${shellEscape(command)}`,
     `HARNESS_MATCHED_TEST_COMMAND=${shellEscape(matchedTestCommand)}`,
+    // Pairs a Bash call's PreToolUse snapshot with its PostToolUse(Failure) check (bash-snapshot.mjs).
+    `HARNESS_TOOL_USE_ID=${shellEscape(payload.tool_use_id || 'none')}`,
   ];
   process.stdout.write(`${lines.join('\n')}\n`);
 });

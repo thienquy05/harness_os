@@ -53,7 +53,9 @@ export async function checkGate(pool: Pool, input: GateCheckInput): Promise<Gate
     return { pass: false, directive: reconcileConfigDirective(integrity.mismatches) };
   }
 
-  if ((input.tool === 'Write' || input.tool === 'Edit') && input.filePath) {
+  // Bash counts too: parse-tool-call.mjs only sends a file for a Bash call when it recognized the
+  // command's write target, and that write lands like any Write/Edit.
+  if ((input.tool === 'Write' || input.tool === 'Edit' || input.tool === 'Bash') && input.filePath) {
     const config = await readHarnessConfig(input.projectPath);
     // gatedGlobs/testGlobs/exemptGlobs are written relative to the project
     // root, but a real PreToolUse payload's tool_input.file_path is always

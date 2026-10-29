@@ -28,4 +28,20 @@ describe('log-revert main', () => {
       }),
     );
   });
+
+  // A gated file written through Bash while the gate was closed is flagged, not reverted.
+  it('records a flagged gated write with --kind gated', async () => {
+    const core = await import('@harness-os/core');
+    const { main } = await import('./log-revert.js');
+    const code = await main(['--project-path', '/p', '--file', 'src/a.ts', '--kind', 'gated']);
+    expect(code).toBe(0);
+    expect(core.recordDecision).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        action: 'flag_ungated_bash_write',
+        status: 'rejected',
+        constitutionRulesApplied: ['CONST-CORE-002'],
+      }),
+    );
+  });
 });

@@ -42,18 +42,40 @@ fi
 # Claude Code's tool call forever. `timeout` sends SIGTERM and the shell sees
 # exit 124, which gets recorded as a (possibly spurious) RED — a known,
 # documented imprecision, not a silent hang.
+#
+# The time limit is perl's alarm, not GNU `timeout` (absent on macOS: every run then exited 127 and
+# was recorded as RED without a single test running). A run that did not complete is not evidence of
+# anything and is not recorded: 126/127 (not runnable, including perl missing) and 142 (SIGALRM, the
+# limit). The gate stays as it was, which for a never-observed RED means closed.
+# ponytail: the alarm stops the test command itself; processes it started can outlive it
 if [[ "$HARNESS_TOOL_NAME" == "Bash" && -n "$HARNESS_MATCHED_TEST_COMMAND" ]]; then
   trap - ERR
   set +e
-  TEST_EXIT=$(cd "$HARNESS_PROJECT_PATH" && timeout 120 bash -c "$HARNESS_MATCHED_TEST_COMMAND" >/dev/null 2>&1; echo $?)
-  RECORD_JSON=$(docker exec harness_gate_daemon node cli/dist/gate-check.js \
-    --mode record-test-run \
-    --project-path "$HARNESS_PROJECT_PATH" \
-    --command "$HARNESS_MATCHED_TEST_COMMAND" \
-    --exit-code "$TEST_EXIT" 2>&1)
+  TEST_LIMIT="${HARNESS_TEST_TIMEOUT_SECONDS:-120}"
+  TEST_EXIT=$(cd "$HARNESS_PROJECT_PATH" && perl -e 'alarm shift; exec @ARGV or exit 127' "$TEST_LIMIT" bash -c "$HARNESS_MATCHED_TEST_COMMAND" >/dev/null 2>&1; echo $?)
+  case "$TEST_EXIT" in
+    126 | 127 | 142)
+      echo "[enforce-gate] this test command did not complete (exit $TEST_EXIT: not runnable, or stopped after ${TEST_LIMIT}s); nothing recorded." >&2
+      ;;
+    *)
+      RECORD_JSON=$(docker exec harness_gate_daemon node cli/dist/gate-check.js \
+        --mode record-test-run \
+        --project-path "$HARNESS_PROJECT_PATH" \
+        --command "$HARNESS_MATCHED_TEST_COMMAND" \
+        --exit-code "$TEST_EXIT" 2>&1)
+      echo "[enforce-gate] harness-os independently ran and recorded this test command (exit $TEST_EXIT): $RECORD_JSON" >&2
+      ;;
+  esac
   set -e
   trap 'echo "{\"action\":\"internal_error\",\"reason\":\"enforce-gate.sh failed unexpectedly - failing closed (CONST-CORE-004)\"}" >&2; exit 2' ERR
-  echo "[enforce-gate] harness-os independently ran and recorded this test command (exit $TEST_EXIT): $RECORD_JSON" >&2
+fi
+
+# Before/after snapshot for post-bash-revert.sh, which then judges only what this call changed.
+# It refuses (exit 2) while a tracked config file is a symlink.
+if [[ "$HARNESS_TOOL_NAME" == "Bash" ]]; then
+  if ! node "$SCRIPT_DIR/bash-snapshot.mjs" save "$HARNESS_PROJECT_PATH" "$HARNESS_TOOL_USE_ID"; then
+    exit 2
+  fi
 fi
 
 # Conservative heuristic (Open Item #8): a Bash call with no recognized write

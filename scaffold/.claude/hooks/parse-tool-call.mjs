@@ -48,10 +48,16 @@ function matchConfiguredTestCommand(projectPath, command) {
     const config = JSON.parse(raw);
     const testCommands = Array.isArray(config.testCommands) ? config.testCommands : [];
     const trimmed = command.trim();
-    const matched = testCommands.some(
-      (entry) => typeof entry.command === 'string' && (trimmed === entry.command || trimmed.startsWith(`${entry.command} `)),
+    const entry = testCommands.find(
+      (e) => typeof e.command === 'string' && (trimmed === e.command || trimmed.startsWith(`${e.command} `)),
     );
-    return matched ? command : '';
+    if (!entry) return '';
+    // Anything after the configured command that can change the exit code or run another command
+    // (pipes, lists, redirects, substitutions, or quotes that could hide them) makes the observed exit
+    // code untrustworthy: `npm test | tail` hid failures, `npm test | grep -q x` faked a RED. Then the
+    // configured command runs alone; plain arguments (a file path, a reporter flag) are kept.
+    const rest = trimmed.slice(entry.command.length);
+    return /[|&;<>()$`'"\\\n]/.test(rest) ? entry.command : trimmed;
   } catch {
     return '';
   }

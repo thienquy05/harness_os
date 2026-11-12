@@ -21,6 +21,7 @@ const CONFIG = {
     { globs: ['**/*.ts'], command: 'false' },
     { globs: ['**/*.ts'], command: 'sleep 5' },
     { globs: ['**/*.ts'], command: 'no-such-test-runner' },
+    { globs: ['**/*.ts'], command: 'exit 0' },
   ],
 };
 
@@ -95,6 +96,31 @@ describe('enforce-gate.sh test runs', () => {
     expect(r.status).toBe(0);
     expect((await stubCalls()).filter((c) => c.includes('--mode record-test-run'))).toEqual([]);
     expect(r.stderr).toContain('did not complete');
+  });
+
+  // A pipeline's exit code is its last command's: `npm test | tail` hid a failing suite (false GREEN) and
+  // `npm test | grep -q x` turned a passing one into a RED that opened the gate. Only the configured
+  // command, or it plus plain arguments, is run and recorded.
+  const recorded = async () => (await stubCalls()).filter((c) => c.includes('--mode record-test-run'));
+
+  it('records the failure of a test command piped into another command', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'false | cat', 't5');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command false --exit-code 1$/)]);
+  });
+
+  it('cannot record a fake RED by piping a passing test command into a failing filter', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'exit 0 | grep -q nothing', 't6');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command exit 0 --exit-code 0$/)]);
+  });
+
+  it('cannot mask a failure with a command list', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'false || true', 't7');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command false --exit-code 1$/)]);
+  });
+
+  it('keeps plain arguments after the configured command', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'false --reporter dot', 't8');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command false --reporter dot --exit-code 1$/)]);
   });
 
   it('stops a test command at the time limit without recording it, with no `timeout` binary needed', async () => {

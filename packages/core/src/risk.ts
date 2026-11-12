@@ -1,6 +1,7 @@
 import type { Pool } from 'pg';
 import { query } from './db.js';
 import { readHarnessConfig } from './harness-config.js';
+import { verifyConfigIntegrity } from './config-integrity.js';
 
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low';
 
@@ -9,7 +10,7 @@ const CRITICAL_KEYWORDS = [
   'trading', 'trade', 'order', 'payment', 'financial', 'wallet', 'ledger', 'funds', 'withdraw', 'deposit',
 ];
 const HIGH_KEYWORDS = [
-  'auth', 'oauth', 'authentication', 'authorization', 'password', 'token', 'session', 'credential', 'crypto', 'secret', 'pii', 'personal data',
+  'auth', 'oauth', 'authenticate', 'authentication', 'authorize', 'authorization', 'password', 'token', 'session', 'credential', 'crypto', 'secret', 'pii', 'personal data',
 ];
 
 export interface RiskAssessmentInput {
@@ -31,12 +32,22 @@ export interface RiskAssessment {
   requiredGates: string[];
 }
 
-/** Whole words only ("border" is not "order", "author" is not "auth"); camelCase and snake_case split into words; plural s/es allowed. */
+/**
+ * Whole words only ("border" is not "order", "author" is not "auth"). Identifiers are split into words
+ * (camelCase, ACRONYMWord, digits, snake_case), and common inflections are allowed
+ * (payments, authenticated, withdrawal, cryptography).
+ */
 function matchesAny(haystack: string, keywords: string[]): string[] {
-  const words = haystack.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+  const words = haystack
+    .replace(/([A-Z]+)([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/([A-Za-z])(\d)/g, '$1 $2')
+    .replace(/(\d)([A-Za-z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .toLowerCase();
   return keywords.filter((keyword) => {
     const k = keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    return new RegExp(`\\b${k}(?:s|es)?\\b`).test(words);
+    return new RegExp(`\\b${k}(?:s|es|d|ed|ing|al|ation|ations|ic|graphy|graphic)?\\b`).test(words);
   });
 }
 
@@ -96,8 +107,13 @@ export async function assessAndRecordRisk(
   pool: Pool,
   input: RiskAssessmentInput & { projectPath: string },
 ): Promise<StoredRiskAssessment> {
-  // A project without a readable config (not initialized, or not mounted here) uses the global rubric.
-  const overrides = await readHarnessConfig(input.projectPath).then((c) => c.risk ?? {}, () => ({}));
+  // Overrides apply only from a config that still matches its verified checksum (an agent could
+  // otherwise write an override, assess, and restore the file). A project without a readable or
+  // verified config (not initialized, or not mounted here) uses the global rubric.
+  const verified = await verifyConfigIntegrity(pool, input.projectPath).then((r) => r.ok, () => false);
+  const overrides = verified
+    ? await readHarnessConfig(input.projectPath).then((c) => c.risk ?? {}, () => ({}))
+    : {};
   const assessment = assessRisk(input, overrides);
   if (Object.keys(overrides).length > 0) assessment.factors = { ...assessment.factors, overrides };
   const rows = await query<{ id: number }>(

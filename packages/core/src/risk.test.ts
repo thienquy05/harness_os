@@ -4,6 +4,11 @@ import { join } from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import type { Pool } from 'pg';
 import { assessAndRecordRisk, assessRisk } from './risk.js';
+import { verifyConfigIntegrity } from './config-integrity.js';
+
+vi.mock('./config-integrity.js', () => ({
+  verifyConfigIntegrity: vi.fn(async () => ({ ok: true, initialized: true, mismatches: [] })),
+}));
 
 describe('assessRisk', () => {
   it('classifies financial/trading keywords as critical', () => {
@@ -47,6 +52,21 @@ describe('assessRisk', () => {
     expect(assessRisk({ requestDescription: 'Add OAuth sign-in' }).level).toBe('high');
   });
 
+  // Review: whole-word matching lost inflections and acronym/digit identifiers that the old
+  // substring match caught. These must keep their level.
+  it.each([
+    ['Add withdrawal limits', 'critical'],
+    ['Fix the authenticated route', 'high'],
+    ['Authorize admin actions', 'high'],
+    ['Switch to a cryptography library', 'high'],
+  ])('keeps inflected keywords: %s -> %s', (text, level) => {
+    expect(assessRisk({ requestDescription: text }).level).toBe(level);
+  });
+
+  it.each(['src/JWTToken.ts', 'src/OAuth2Client.ts', 'src/session2Store.ts'])('splits acronyms and digits in %s', (path) => {
+    expect(assessRisk({ requestDescription: 'Refactor', touchedPaths: [path] }).level).toBe('high');
+  });
+
   it('applies project overrides: ignored keywords and extra keywords', () => {
     const risk = { ignoreKeywords: ['financial'], extraHigh: ['nfc'] };
     expect(assessRisk({ requestDescription: 'Show financial cost estimates' }, risk).level).toBe('low');
@@ -68,6 +88,30 @@ describe('assessAndRecordRisk', () => {
     await rm(project, { recursive: true, force: true });
     expect(result.level).toBe('low');
     expect(result.factors).toMatchObject({ overrides: { ignoreKeywords: ['financial'] } });
+  });
+
+  // Review: overrides must come from a config that still matches its verified checksum, or an agent
+  // could write an override, assess, and write the original bytes back.
+  it('ignores overrides when the config does not verify', async () => {
+    vi.mocked(verifyConfigIntegrity).mockResolvedValueOnce({ ok: false, initialized: true, mismatches: ['.claude/harness.config.json'] });
+    const project = await mkdtemp(join(tmpdir(), 'harness-risk-'));
+    await mkdir(join(project, '.claude'));
+    await writeFile(join(project, '.claude', 'harness.config.json'), JSON.stringify({ risk: { ignoreKeywords: ['payment'] } }));
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: 8 }] });
+    const result = await assessAndRecordRisk({ query } as unknown as Pool, { requestDescription: 'Add a payment retry path', projectPath: project });
+    await rm(project, { recursive: true, force: true });
+    expect(result.level).toBe('critical');
+  });
+
+  it('ignores malformed overrides instead of splitting strings into letters or throwing', async () => {
+    const project = await mkdtemp(join(tmpdir(), 'harness-risk-'));
+    await mkdir(join(project, '.claude'));
+    await writeFile(join(project, '.claude', 'harness.config.json'), JSON.stringify({ risk: { extraHigh: 'c', ignoreKeywords: 'payment' } }));
+    const query = vi.fn().mockResolvedValue({ rows: [{ id: 9 }] });
+    const run = (requestDescription: string) => assessAndRecordRisk({ query } as unknown as Pool, { requestDescription, projectPath: project });
+    expect((await run('Plan c for the layout')).level).toBe('low');
+    expect((await run('Add a payment retry path')).level).toBe('critical');
+    await rm(project, { recursive: true, force: true });
   });
 
   it('persists the assessment and returns it with an id', async () => {

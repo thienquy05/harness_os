@@ -26,8 +26,18 @@ export async function readHarnessConfig(projectPath: string): Promise<HarnessCon
     exemptGlobs: raw.exemptGlobs ?? [],
     testGlobs: raw.testGlobs ?? [],
     testCommands: raw.testCommands ?? [],
-    ...(raw.risk ? { risk: raw.risk } : {}),
+    ...(raw.risk ? { risk: validRiskOverrides(raw.risk) } : {}),
   };
+}
+
+/** Keeps only lists of strings, so a mistyped `"extraHigh": "nfc"` is ignored rather than split into letters. */
+function validRiskOverrides(risk: unknown): RiskOverrides {
+  const out: RiskOverrides = {};
+  for (const key of ['ignoreKeywords', 'extraCritical', 'extraHigh'] as const) {
+    const list = (risk as Record<string, unknown> | null)?.[key];
+    if (Array.isArray(list) && list.every((k) => typeof k === 'string' && k.trim() !== '')) out[key] = list;
+  }
+  return out;
 }
 
 export type FileClassification = 'exempt' | 'test' | 'gated' | 'ungated';

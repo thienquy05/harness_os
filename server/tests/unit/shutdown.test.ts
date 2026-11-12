@@ -37,6 +37,13 @@ describe('installShutdown', () => {
     expect(proc.exit).toHaveBeenCalledTimes(1);
   });
 
+  it('still exits when closing hangs (a leaked pool client)', async () => {
+    const proc = Object.assign(new EventEmitter(), { exit: vi.fn() });
+    installShutdown(() => new Promise<void>(() => {}), proc as unknown as NodeJS.Process, new EventEmitter() as unknown as NodeJS.ReadableStream, 50);
+    proc.emit('SIGTERM');
+    await vi.waitFor(() => expect(proc.exit).toHaveBeenCalledWith(0));
+  });
+
   it('still exits when closing fails', async () => {
     const proc = Object.assign(new EventEmitter(), { exit: vi.fn() });
     installShutdown(async () => { throw new Error('pool already ended'); }, proc as unknown as NodeJS.Process, new EventEmitter() as unknown as NodeJS.ReadableStream);

@@ -1,5 +1,6 @@
 import type { Pool } from 'pg';
 import { query } from './db.js';
+import { readHarnessConfig } from './harness-config.js';
 
 export type RiskLevel = 'critical' | 'high' | 'medium' | 'low';
 
@@ -8,12 +9,19 @@ const CRITICAL_KEYWORDS = [
   'trading', 'trade', 'order', 'payment', 'financial', 'wallet', 'ledger', 'funds', 'withdraw', 'deposit',
 ];
 const HIGH_KEYWORDS = [
-  'auth', 'authentication', 'authorization', 'password', 'token', 'session', 'credential', 'crypto', 'secret', 'pii', 'personal data',
+  'auth', 'oauth', 'authentication', 'authorization', 'password', 'token', 'session', 'credential', 'crypto', 'secret', 'pii', 'personal data',
 ];
 
 export interface RiskAssessmentInput {
   requestDescription: string;
   touchedPaths?: string[];
+}
+
+/** Per-project keyword overrides: `risk` in .claude/harness.config.json (checksummed with the rest of it). */
+export interface RiskOverrides {
+  ignoreKeywords?: string[];
+  extraCritical?: string[];
+  extraHigh?: string[];
 }
 
 export interface RiskAssessment {
@@ -23,16 +31,24 @@ export interface RiskAssessment {
   requiredGates: string[];
 }
 
+/** Whole words only ("border" is not "order", "author" is not "auth"); camelCase and snake_case split into words; plural s/es allowed. */
 function matchesAny(haystack: string, keywords: string[]): string[] {
-  const lower = haystack.toLowerCase();
-  return keywords.filter((keyword) => lower.includes(keyword));
+  const words = haystack.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+  return keywords.filter((keyword) => {
+    const k = keyword.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    return new RegExp(`\\b${k}(?:s|es)?\\b`).test(words);
+  });
 }
 
 /** Rule-based, deterministic — no LLM call (§2.4). Same inputs always produce the same level. */
-export function assessRisk(input: RiskAssessmentInput): RiskAssessment {
+export function assessRisk(input: RiskAssessmentInput, overrides: RiskOverrides = {}): RiskAssessment {
   const searchText = [input.requestDescription, ...(input.touchedPaths ?? [])].join(' ');
+  const ignored = new Set((overrides.ignoreKeywords ?? []).map((k) => k.toLowerCase()));
+  const keep = (list: string[]) => list.filter((k) => !ignored.has(k.toLowerCase()));
+  const CRITICAL_KEYWORDS_P = keep([...CRITICAL_KEYWORDS, ...(overrides.extraCritical ?? [])]);
+  const HIGH_KEYWORDS_P = keep([...HIGH_KEYWORDS, ...(overrides.extraHigh ?? [])]);
 
-  const criticalMatches = matchesAny(searchText, CRITICAL_KEYWORDS);
+  const criticalMatches = matchesAny(searchText, CRITICAL_KEYWORDS_P);
   if (criticalMatches.length > 0) {
     return {
       level: 'critical',
@@ -42,7 +58,7 @@ export function assessRisk(input: RiskAssessmentInput): RiskAssessment {
     };
   }
 
-  const highMatches = matchesAny(searchText, HIGH_KEYWORDS);
+  const highMatches = matchesAny(searchText, HIGH_KEYWORDS_P);
   if (highMatches.length > 0) {
     return {
       level: 'high',
@@ -80,7 +96,10 @@ export async function assessAndRecordRisk(
   pool: Pool,
   input: RiskAssessmentInput & { projectPath: string },
 ): Promise<StoredRiskAssessment> {
-  const assessment = assessRisk(input);
+  // A project without a readable config (not initialized, or not mounted here) uses the global rubric.
+  const overrides = await readHarnessConfig(input.projectPath).then((c) => c.risk ?? {}, () => ({}));
+  const assessment = assessRisk(input, overrides);
+  if (Object.keys(overrides).length > 0) assessment.factors = { ...assessment.factors, overrides };
   const rows = await query<{ id: number }>(
     pool,
     `INSERT INTO risk_assessments (request_description, factors, level, rationale, required_gates, project_path)

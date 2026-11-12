@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { minimatch } from 'minimatch';
 import { resolveProjectFsPath } from './project-path.js';
+import type { RiskOverrides } from './risk.js';
 
 export interface TestCommandConfig {
   globs: string[];
@@ -13,6 +14,8 @@ export interface HarnessConfig {
   exemptGlobs: string[];
   testGlobs: string[];
   testCommands: TestCommandConfig[];
+  /** Optional per-project risk keyword overrides (risk/rubric.md). */
+  risk?: RiskOverrides;
 }
 
 export async function readHarnessConfig(projectPath: string): Promise<HarnessConfig> {
@@ -23,6 +26,7 @@ export async function readHarnessConfig(projectPath: string): Promise<HarnessCon
     exemptGlobs: raw.exemptGlobs ?? [],
     testGlobs: raw.testGlobs ?? [],
     testCommands: raw.testCommands ?? [],
+    ...(raw.risk ? { risk: raw.risk } : {}),
   };
 }
 

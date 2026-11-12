@@ -17,11 +17,13 @@ ships with the global rubric only).
 
 ## Classification rule (evaluated in this order, first match wins)
 
-1. **Auto-critical keywords** (case-insensitive match against
-   `request_description` or any `touched_paths` segment): `trading`,
+1. **Auto-critical keywords** (case-insensitive, **whole words**, against
+   `request_description` and `touched_paths`; camelCase and snake_case are
+   split into words and a plural `s`/`es` is allowed, so `authService.ts`
+   and `payments` match while `border` and `author` do not): `trading`,
    `trade`, `order`, `payment`, `financial`, `wallet`, `ledger`, `funds`,
    `withdraw`, `deposit`. Matches CONST-ARCH-001. → `critical`.
-2. **Auto-high keywords**: `auth`, `authentication`, `authorization`,
+2. **Auto-high keywords**: `auth`, `oauth`, `authentication`, `authorization`,
    `password`, `token`, `session`, `credential`, `crypto`, `secret`,
    `pii`, `personal data`. → `high`.
 3. **Path matches a project's `gatedGlobs`** (from `harness.config.json`)
@@ -39,3 +41,23 @@ A human or a reviewer directive may raise a stored assessment's level (a new
 `risk_assessments` row, since the table is append-only-by-convention like the
 decision log) but nothing in the system automatically lowers a level once
 assigned in the same request.
+
+## Project overrides
+
+A project can tune the keyword lists in its `.claude/harness.config.json`
+(which is checksummed, so a change needs `harness reconcile-config`):
+
+```json
+"risk": {
+  "ignoreKeywords": ["financial"],
+  "extraCritical": ["migration"],
+  "extraHigh": ["nfc"]
+}
+```
+
+`ignoreKeywords` removes words that are harmless in this project (for example
+"financial" in an app that only shows cost estimates); `extraCritical` and
+`extraHigh` add the project's own sensitive words. Applied overrides are stored
+in `factors.overrides`. Where the project config cannot be read (not
+initialized, or the MCP container does not mount the projects root; see
+RUNBOOK.md), the global lists apply.

@@ -3,6 +3,7 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createPool } from '@harness-os/core';
 import { loadConfig } from './config.js';
+import { installShutdown } from './shutdown.js';
 import { registerGetConstitutionTool } from './tools/get-constitution.js';
 import { registerEvaluateGovernanceTool } from './tools/evaluate-governance.js';
 import { registerAssessRiskTool } from './tools/assess-risk.js';
@@ -40,6 +41,10 @@ async function main(): Promise<void> {
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  installShutdown(async () => {
+    await server.close();
+    await pool.end();
+  });
 }
 
 main().catch((error: unknown) => {

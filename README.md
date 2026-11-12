@@ -46,7 +46,7 @@ PostToolUse hook on Bash (post-bash-revert.sh)
 ```
 
 Notes:
-- When Claude runs a command matching your `testCommands`, `enforce-gate.sh` **runs it itself** (120 s timeout, `HARNESS_TEST_TIMEOUT_SECONDS`) in its own process group and records red/green in `test_runs`. It then blocks Claude's identical call and returns the exit code, the last 80 lines (`HARNESS_TEST_OUTPUT_LINES`) and the full log path, so the suite runs once. Only the configured command, optionally with plain arguments, is run: anything piped or chained after it is dropped, because it could change the exit code.
+- When Claude runs a command matching your `testCommands`, `enforce-gate.sh` **runs it itself** (120 s timeout, `HARNESS_TEST_TIMEOUT_SECONDS`) in its own process group and records red/green in `test_runs`. It then blocks Claude's identical call and returns the exit code, the last 80 lines (`HARNESS_TEST_OUTPUT_LINES`) and the full log path, so the suite runs once. Only the configured command runs, with arguments kept only when they are `--` or existing paths: anything piped or chained after it, and any other argument, is dropped because it could change the exit code or write files outside the gate.
 - Every hook failure is **fail-closed**: a crash in the hook blocks the write rather than allowing it.
 - Config tampering is detected, not prevented: `harness.config.json`, `enforce-gate.sh` and `settings.json` are SHA-256 checksummed at init. If they drift, *all* gated writes are blocked until a human runs `harness reconcile-config`.
 

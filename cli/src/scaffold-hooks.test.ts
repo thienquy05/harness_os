@@ -23,6 +23,7 @@ const CONFIG = {
     { globs: ['**/*.ts'], command: 'no-such-test-runner' },
     { globs: ['**/*.ts'], command: 'exit 0' },
     { globs: ['**/*.ts'], command: 'bash spawn.sh' },
+    { globs: ['**/*.ts'], command: 'bash spawn-stubborn.sh' },
     { globs: ['**/*.ts'], command: 'echo test-output-marker && false' },
   ],
 };
@@ -30,7 +31,7 @@ const CONFIG = {
 const STUB_DOCKER = `#!/bin/bash
 printf '%s\\n' "$*" >> "$STUB_LOG"
 case "$*" in
-  *"--mode record-test-run"*) echo '{"recorded":true}' ;;
+  *"--mode record-test-run"*) echo '{"recorded":true}'; exit "\${STUB_RECORD_EXIT:-0}" ;;
   *gate-check.js*--file*) echo '{"pass":false}'; exit "\${STUB_GATE_EXIT:-0}" ;;
   *gate-check.js*) echo '{"action":"reconcile_config"}'; exit "\${STUB_INTEGRITY_EXIT:-0}" ;;
 esac
@@ -132,9 +133,51 @@ describe('enforce-gate.sh test runs', () => {
     expect(await recorded()).toEqual([expect.stringMatching(/--command false --exit-code 1$/)]);
   });
 
-  it('keeps plain arguments after the configured command', async () => {
-    hook('enforce-gate.sh', 'PreToolUse', 'false --reporter dot', 't8');
-    expect(await recorded()).toEqual([expect.stringMatching(/--command false --reporter dot --exit-code 1$/)]);
+  it('keeps arguments that are existing paths', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'false -- src', 't8');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command false -- src --exit-code 1$/)]);
+  });
+
+  // Any other argument can make a passing command fail without a failing test (a missing path, an
+  // unknown flag), or write files outside the gate (-u, --outputFile): run the bare command instead.
+  it('cannot record a fake RED through an argument that is not an existing path', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'exit 0 no-such-file', 't11');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command exit 0 --exit-code 0$/)]);
+  });
+
+  it('keeps the path arguments before a pipe', async () => {
+    hook('enforce-gate.sh', 'PreToolUse', 'false src 2>&1 | tail -5', 't12');
+    expect(await recorded()).toEqual([expect.stringMatching(/--command false src --exit-code 1$/)]);
+  });
+
+  it('tells Claude when the rest of a chained command was not run', async () => {
+    const r = hook('enforce-gate.sh', 'PreToolUse', 'false && echo built', 't13');
+    expect(r.stderr).toContain('was NOT run');
+    expect(r.stderr).toContain('&& echo built');
+  });
+
+  it('says plainly when the result could not be recorded', async () => {
+    const r = hook('enforce-gate.sh', 'PreToolUse', 'false', 't14', { STUB_RECORD_EXIT: '1' });
+    expect(r.stderr).toContain('NOT recorded');
+  });
+
+  it('reuses one log file per project instead of leaving one per run', async () => {
+    const path = (r: { stderr: string }) => /full output: (\S+)/.exec(r.stderr)?.[1];
+    const first = path(hook('enforce-gate.sh', 'PreToolUse', 'false', 't15'));
+    const second = path(hook('enforce-gate.sh', 'PreToolUse', 'false', 't16'));
+    expect(first).toBeDefined();
+    expect(second).toBe(first);
+    await rm(first as string, { force: true });
+  });
+
+  it('kills children that ignore TERM after the test command exits', async () => {
+    await writeFile(join(project, 'spawn-stubborn.sh'), 'bash -c \'trap "" TERM; sleep 30\' & echo $! > child.pid\nexit 1\n');
+    hook('enforce-gate.sh', 'PreToolUse', 'bash spawn-stubborn.sh', 't17');
+    const child = Number((await readFile(join(project, 'child.pid'), 'utf8')).trim());
+    await new Promise((r) => setTimeout(r, 300));
+    const alive = (() => { try { process.kill(child, 0); return true; } catch { return false; } })();
+    if (alive) process.kill(child, 'SIGKILL');
+    expect(alive).toBe(false);
   });
 
   it('stops the processes a test command started when it hits the time limit', async () => {

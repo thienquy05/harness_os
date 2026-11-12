@@ -23,6 +23,7 @@ const CONFIG = {
     { globs: ['**/*.ts'], command: 'no-such-test-runner' },
     { globs: ['**/*.ts'], command: 'exit 0' },
     { globs: ['**/*.ts'], command: 'bash spawn.sh' },
+    { globs: ['**/*.ts'], command: 'echo test-output-marker && false' },
   ],
 };
 
@@ -86,10 +87,22 @@ afterEach(async () => {
 describe('enforce-gate.sh test runs', () => {
   it('records a real test failure', async () => {
     const r = hook('enforce-gate.sh', 'PreToolUse', 'false', 't1');
-    expect(r.status).toBe(0);
+    expect(r.status).toBe(2);
     expect((await stubCalls()).filter((c) => c.includes('--mode record-test-run'))).toEqual([
       expect.stringMatching(/--exit-code 1$/),
     ]);
+  });
+
+  // The hook already ran the suite; letting Claude's identical call run it again doubled every test run.
+  it('runs a recorded test command once: blocks the duplicate and hands Claude the result', async () => {
+    const r = hook('enforce-gate.sh', 'PreToolUse', 'echo test-output-marker && false', 't10');
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('exit 1');
+    expect(r.stderr).toContain('not run a second time');
+    expect(r.stderr).toContain('test-output-marker');
+    const logPath = /full output: (\S+)/.exec(r.stderr)?.[1] ?? '';
+    expect(await readFile(logPath, 'utf8')).toContain('test-output-marker');
+    await rm(logPath, { force: true });
   });
 
   it('does not record a test command that could not run (exit 127)', async () => {

@@ -31,9 +31,10 @@ fi
 # gate-check.js inside harness_gate_daemon (which has no toolchain and only a
 # read-only mount, see project-path.ts) — runs that exact command itself,
 # host-side, real cwd, real toolchain, and records the real exit code it
-# observed. Claude's own identical Bash call still runs normally right after
-# (not blocked here), so it sees full test output as usual; this block only
-# ensures a *trustworthy* copy of the result reaches test_runs first. See
+# observed. Claude's identical Bash call is then blocked (exit 2) and handed
+# the exit code, the end of the output and the full log path instead, so the
+# suite runs once per call, not twice; a run that did not complete is not
+# blocked. The result recorded in test_runs is the one harness-os saw. See
 # gates.ts's red-phase check and test-runs.ts's recordTestRun for what
 # consumes this, and plan §12.3 for the residual gap this doesn't close (a
 # fabricated direct `gate-check --mode record-test-run` call bypassing this
@@ -53,6 +54,7 @@ if [[ "$HARNESS_TOOL_NAME" == "Bash" && -n "$HARNESS_MATCHED_TEST_COMMAND" ]]; t
   trap - ERR
   set +e
   TEST_LIMIT="${HARNESS_TEST_TIMEOUT_SECONDS:-120}"
+  TEST_LOG=$(mktemp "${TMPDIR:-/tmp}/harness-test.XXXXXX")
   TEST_EXIT=$(cd "$HARNESS_PROJECT_PATH" && perl -e '
     my $limit = shift;
     my $pid = fork; exit 127 unless defined $pid;
@@ -62,9 +64,11 @@ if [[ "$HARNESS_TOOL_NAME" == "Bash" && -n "$HARNESS_MATCHED_TEST_COMMAND" ]]; t
     waitpid($pid, 0); my $status = $?;
     alarm 0; kill "TERM", -$pid;
     exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
-  ' "$TEST_LIMIT" bash -c "$HARNESS_MATCHED_TEST_COMMAND" >/dev/null 2>&1; echo $?)
+  ' "$TEST_LIMIT" bash -c "$HARNESS_MATCHED_TEST_COMMAND" >"$TEST_LOG" 2>&1; echo $?)
   case "$TEST_EXIT" in
     126 | 127 | 142)
+      # Not evidence: let Claude's own call run so it sees why.
+      rm -f "$TEST_LOG"
       echo "[enforce-gate] this test command did not complete (exit $TEST_EXIT: not runnable, or stopped after ${TEST_LIMIT}s); nothing recorded." >&2
       ;;
     *)
@@ -73,7 +77,16 @@ if [[ "$HARNESS_TOOL_NAME" == "Bash" && -n "$HARNESS_MATCHED_TEST_COMMAND" ]]; t
         --project-path "$HARNESS_PROJECT_PATH" \
         --command "$HARNESS_MATCHED_TEST_COMMAND" \
         --exit-code "$TEST_EXIT" 2>&1)
-      echo "[enforce-gate] harness-os independently ran and recorded this test command (exit $TEST_EXIT): $RECORD_JSON" >&2
+      # The suite just ran; running Claude's identical call again would double every test run. Block it
+      # (exit 2) and hand Claude the result instead: exit code, the end of the output, the full log.
+      {
+        echo "[enforce-gate] harness-os ran this test command and recorded it (exit $TEST_EXIT): $RECORD_JSON"
+        echo "[enforce-gate] This is the test result, not an error; the command is not run a second time. Command: $HARNESS_MATCHED_TEST_COMMAND"
+        echo "[enforce-gate] full output: $TEST_LOG"
+        echo "--- last ${HARNESS_TEST_OUTPUT_LINES:-80} lines ---"
+        tail -n "${HARNESS_TEST_OUTPUT_LINES:-80}" "$TEST_LOG"
+      } >&2
+      exit 2
       ;;
   esac
   set -e

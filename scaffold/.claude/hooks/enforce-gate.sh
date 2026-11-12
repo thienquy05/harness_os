@@ -47,12 +47,22 @@ fi
 # was recorded as RED without a single test running). A run that did not complete is not evidence of
 # anything and is not recorded: 126/127 (not runnable, including perl missing) and 142 (SIGALRM, the
 # limit). The gate stays as it was, which for a never-observed RED means closed.
-# ponytail: the alarm stops the test command itself; processes it started can outlive it
+# The test command runs in its own process group; at the limit, and after it exits, the whole group is
+# killed, so servers or workers it started cannot outlive it.
 if [[ "$HARNESS_TOOL_NAME" == "Bash" && -n "$HARNESS_MATCHED_TEST_COMMAND" ]]; then
   trap - ERR
   set +e
   TEST_LIMIT="${HARNESS_TEST_TIMEOUT_SECONDS:-120}"
-  TEST_EXIT=$(cd "$HARNESS_PROJECT_PATH" && perl -e 'alarm shift; exec @ARGV or exit 127' "$TEST_LIMIT" bash -c "$HARNESS_MATCHED_TEST_COMMAND" >/dev/null 2>&1; echo $?)
+  TEST_EXIT=$(cd "$HARNESS_PROJECT_PATH" && perl -e '
+    my $limit = shift;
+    my $pid = fork; exit 127 unless defined $pid;
+    if (!$pid) { setpgrp(0, 0); exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", -$pid; exit 142 };
+    alarm $limit;
+    waitpid($pid, 0); my $status = $?;
+    alarm 0; kill "TERM", -$pid;
+    exit($status & 127 ? 128 + ($status & 127) : $status >> 8);
+  ' "$TEST_LIMIT" bash -c "$HARNESS_MATCHED_TEST_COMMAND" >/dev/null 2>&1; echo $?)
   case "$TEST_EXIT" in
     126 | 127 | 142)
       echo "[enforce-gate] this test command did not complete (exit $TEST_EXIT: not runnable, or stopped after ${TEST_LIMIT}s); nothing recorded." >&2

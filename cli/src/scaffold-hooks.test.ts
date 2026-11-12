@@ -22,6 +22,7 @@ const CONFIG = {
     { globs: ['**/*.ts'], command: 'sleep 5' },
     { globs: ['**/*.ts'], command: 'no-such-test-runner' },
     { globs: ['**/*.ts'], command: 'exit 0' },
+    { globs: ['**/*.ts'], command: 'bash spawn.sh' },
   ],
 };
 
@@ -121,6 +122,15 @@ describe('enforce-gate.sh test runs', () => {
   it('keeps plain arguments after the configured command', async () => {
     hook('enforce-gate.sh', 'PreToolUse', 'false --reporter dot', 't8');
     expect(await recorded()).toEqual([expect.stringMatching(/--command false --reporter dot --exit-code 1$/)]);
+  });
+
+  it('stops the processes a test command started when it hits the time limit', async () => {
+    await writeFile(join(project, 'spawn.sh'), 'sleep 30 & echo $! > child.pid\nsleep 30\n');
+    hook('enforce-gate.sh', 'PreToolUse', 'bash spawn.sh', 't9', { HARNESS_TEST_TIMEOUT_SECONDS: '1' });
+    const child = Number((await readFile(join(project, 'child.pid'), 'utf8')).trim());
+    const alive = (() => { try { process.kill(child, 0); return true; } catch { return false; } })();
+    if (alive) process.kill(child, 'SIGKILL');
+    expect(alive).toBe(false);
   });
 
   it('stops a test command at the time limit without recording it, with no `timeout` binary needed', async () => {

@@ -63,10 +63,15 @@ export function requestReviewDirective(riskLevel: RiskLevel, files: string[]): D
       { riskLevel },
     );
   }
-  return invokeAgentDirective(
-    agent,
-    files,
-    `Risk level "${riskLevel}" requires a review from ${agent} before this change can be merged (risk/rubric.md).`,
+  // Independence: models rate their own output higher than equally good output from others, so the
+  // reviewer is a separate subagent, not the agent that wrote the change, with fresh context.
+  const model = riskLevel === 'critical' || riskLevel === 'high' ? 'opus' : 'sonnet';
+  return buildDirective(
+    'invoke_agent',
+    `Risk level "${riskLevel}" requires a review from ${agent} before this change can be merged (risk/rubric.md). ` +
+      `Run ${agent} as a separate subagent with fresh context (model: ${model}), not the agent that wrote the change: ` +
+      `give it only the diff, the spec and the test results, never the author's conversation.`,
+    { agent, files, independent: true, model },
   );
 }
 

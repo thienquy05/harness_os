@@ -337,8 +337,8 @@ the image bundles `packages/core` and `cli/` too), `docker compose -f db/docker-
   "type": "stdio",
   "command": "docker",
   "args": ["run", "--rm", "-i", "--network", "harness_os_default",
-            "-v", "/home/lehoa/projects/harness-os/constitution:/gov/constitution:ro",
-            "-v", "/home/lehoa/projects/harness-os/specs:/gov/specs:ro",
+            "-v", "<HARNESS_HOME>/constitution:/gov/constitution:ro",
+            "-v", "<HARNESS_HOME>/specs:/gov/specs:ro",
             "-e", "DATABASE_URL=postgres://harness_app:harness_app@harness_postgres:5432/harness_os",
             "harness-os:latest", "mcp-serve"]
 }
@@ -685,7 +685,7 @@ as fixed-per-schema but not yet independently reproduced, not as proven the way 
   Claude Code working session touching real gated files over time.
 - ~~**A live, in-session Claude-Code-triggered fire of `enforce-gate.sh` has not been observed.**~~
   **Resolved and fully re-confirmed.** The user restarted a session inside
-  `/home/lehoa/projects/harness-hook-live-test` (a throwaway governed project, scaffold stamped,
+  `$HOME/projects/harness-hook-live-test` (a throwaway governed project, scaffold stamped,
   deliberately left un-initialized in the DB) and asked Claude Code to create a file. Claude Code's own
   PreToolUse:Write hook fired for real, confirming the corrected `settings.json` shape (§12.2 item 9)
   actually wires up — this was the one thing no unit test could reach. It surfaced the `trap ... ERR`
@@ -1069,7 +1069,7 @@ both confirmed empirically before being treated as real:
    §2.1 component 3's own stated design constraint that the tracked config files "have to stay writable, since
    legitimate config changes are normal." Fixed by adding `--user "$(id -u):$(id -g)" -e HOME=/tmp` to the
    documented invocation (now reflected above). Re-verified with a fresh real fire: files land host-owned
-   (`-rw-r--r-- 1 lehoa lehoa ...`), and the host user can `git commit`/edit `.claude/settings.json`
+   (`-rw-r--r-- 1 user user ...`), and the host user can `git commit`/edit `.claude/settings.json`
    immediately afterward with zero workarounds. The `safe.directory` exemption in `commitFiles`/`ensureGitRepo`
    was left in place as defense-in-depth (covers a project already owned by some third uid), but is no longer
    load-bearing for the common case, since the container's uid now matches the mount owner exactly.

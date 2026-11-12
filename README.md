@@ -183,7 +183,7 @@ cd db && HARNESS_PROJECTS_ROOT=$HOME/projects docker compose up -d
    ```
    This detects the stack, writes `.claude/{hooks,settings.json,harness.config.json,agents/AGENTS.md}`, runs `git init` if needed, commits, and records the trust baseline. Then just open the project in Claude Code.
 
-> ⚠️ `RUNBOOK.md` and `.claude/settings.local.json` contain the author's machine paths (`/home/lehoa/projects/...`). Replace them with your own.
+> `RUNBOOK.md` uses `$HARNESS_HOME` and `$HARNESS_PROJECTS_ROOT`; set them for your machine. `.claude/settings.local.json` is personal and not tracked.
 
 ### Day-to-day commands
 

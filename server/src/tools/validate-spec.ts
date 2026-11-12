@@ -16,7 +16,7 @@ export function registerValidateSpecTool(server: McpServer): void {
       description: 'Checks spec content against its type schema without writing anything.',
       inputSchema: {
         type: z.enum(SPEC_TYPES as [string, ...string[]]),
-        content: z.record(z.unknown()),
+        content: z.record(z.string(), z.unknown()),
       },
     },
     async (args) => {

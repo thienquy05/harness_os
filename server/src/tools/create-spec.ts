@@ -17,7 +17,7 @@ export function registerCreateSpecTool(server: McpServer, pool: Pool): void {
         spec_id: z.string().describe('Business identifier, e.g. APX-API-001.'),
         type: z.enum(SPEC_TYPES as [string, ...string[]]),
         title: z.string(),
-        content: z.record(z.unknown()).describe('Spec content matching its type schema.'),
+        content: z.record(z.string(), z.unknown()).describe('Spec content matching its type schema.'),
         depends_on: z
           .array(z.string())
           .optional()

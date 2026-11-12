@@ -3,8 +3,7 @@
 `assess_risk` (and `gate-check`'s use of it) is rule-based and deterministic
 — no LLM call, same inputs always produce the same level. Inputs are a free-text
 `request_description`, an optional list of `touched_paths`, and an optional
-`project_path` (used to load any project-specific keyword overrides later; v1
-ships with the global rubric only).
+`project_path`, used to load the project's keyword overrides (below).
 
 ## Levels
 

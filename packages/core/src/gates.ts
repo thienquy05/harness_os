@@ -1,4 +1,3 @@
-import { isAbsolute, relative } from 'node:path';
 import type { Pool } from 'pg';
 import { recordDecision } from './audit.js';
 import { verifyConfigIntegrity } from './config-integrity.js';
@@ -9,6 +8,7 @@ import {
   runHarnessInitDirective,
 } from './directives.js';
 import { classifyFile, readHarnessConfig } from './harness-config.js';
+import { governingCheckout } from './project-path.js';
 import { getLatestTestRun } from './test-runs.js';
 
 export interface GateCheckInput {
@@ -62,12 +62,11 @@ export async function checkGate(pool: Pool, input: GateCheckInput): Promise<Gate
     // absolute — classifyFile's minimatch never matches an absolute path
     // against a pattern like "src/**/*.ts". Only surfaced by a real,
     // in-session Claude-Code-triggered fire (plan §12.4 Open Item #16);
-    // every prior test used a relative path and missed it.
-    const relativeFilePath = isAbsolute(input.filePath)
-      ? relative(input.projectPath, input.filePath)
-      : input.filePath;
-    if (classifyFile(config, relativeFilePath) === 'gated') {
-      const latestRun = await getLatestTestRun(pool, input.projectPath);
+    // every prior test used a relative path and missed it. The file is judged in the checkout it lies in
+    // (a Claude Code worktree has its own root and its own RED), see governingCheckout.
+    const { checkout, path } = await governingCheckout(input.projectPath, input.filePath);
+    if (classifyFile(config, path) === 'gated') {
+      const latestRun = await getLatestTestRun(pool, checkout);
       if (latestRun?.phase !== 'red') {
         return { pass: false, directive: requireRedPhaseDirective(input.filePath) };
       }

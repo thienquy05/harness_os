@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import type { Pool } from 'pg';
 import { query } from './db.js';
-import { resolveProjectFsPath } from './project-path.js';
+import { mainCheckoutOf, resolveProjectFsPath } from './project-path.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -36,6 +36,16 @@ export async function hashFile(absolutePath: string): Promise<string> {
  * to run harness init apart from telling them to reconcile-config.
  */
 export async function verifyConfigIntegrity(pool: Pool, projectPath: string): Promise<ConfigIntegrityResult> {
+  const own = await compareWithRecords(pool, projectPath, projectPath);
+  if (own.initialized) return own;
+  // A linked worktree (Claude Code's .claude/worktrees/<name>/) is the same governed project: its files
+  // are checked against the main checkout's records. A worktree a human reconciled has its own (above).
+  const main = await mainCheckoutOf(projectPath);
+  return main ? compareWithRecords(pool, main, projectPath) : own;
+}
+
+/** Compares the tracked files in `projectPath` with the checksums recorded for `recordsPath`. */
+async function compareWithRecords(pool: Pool, recordsPath: string, projectPath: string): Promise<ConfigIntegrityResult> {
   const claudeDir = join(resolveProjectFsPath(projectPath), '.claude');
   const mismatches: TrackedConfigFile[] = [];
   let verifiedFileCount = 0;
@@ -46,7 +56,7 @@ export async function verifyConfigIntegrity(pool: Pool, projectPath: string): Pr
       `SELECT sha256 FROM config_checksums
        WHERE project_path = $1 AND file_path = $2
        ORDER BY verified_at DESC LIMIT 1`,
-      [projectPath, file],
+      [recordsPath, file],
     );
     if (rows.length === 0) continue;
     verifiedFileCount += 1;

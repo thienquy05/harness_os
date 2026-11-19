@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
@@ -179,6 +179,57 @@ describe('config-integrity', () => {
 
       const result = await verifyConfigIntegrity(pool, projectPath);
       expect(result.ok).toBe(true);
+    });
+  });
+
+  // Claude Code worktrees (`claude --worktree`, subagent isolation, EnterWorktree) are checkouts under
+  // <project>/.claude/worktrees/<name>/. They are the same governed project: their tracked config is
+  // checked against the main checkout's records, with no `harness init` of their own.
+  describe('linked worktrees', () => {
+    let pool: Pool;
+    let worktree: string;
+
+    beforeEach(async () => {
+      projectPath = await realpath(projectPath); // git writes real paths (macOS: /var is /private/var)
+      ({ pool } = fakePoolWithChecksumRows());
+      await initGitRepo(projectPath);
+      await recordVerifiedConfig(pool, projectPath, 'test-human');
+      worktree = join(projectPath, '.claude', 'worktrees', 'w');
+      await execFileAsync('git', ['worktree', 'add', '-q', worktree, '-b', 'w'], { cwd: projectPath });
+    });
+
+    it("trusts a linked worktree of an initialized project by the main checkout's records", async () => {
+      const result = await verifyConfigIntegrity(pool, worktree);
+      expect(result).toEqual({ ok: true, initialized: true, mismatches: [] });
+    });
+
+    it("reports a mismatch when a worktree's tracked config differs from the main checkout's records", async () => {
+      await writeFile(join(worktree, '.claude', 'hooks', 'enforce-gate.sh'), '#!/bin/sh\nexit 0\n');
+      const result = await verifyConfigIntegrity(pool, worktree);
+      expect(result).toEqual({ ok: false, initialized: true, mismatches: ['hooks/enforce-gate.sh'] });
+    });
+
+    it('does not trust a folder whose .git file only claims to be a worktree of the project', async () => {
+      const forged = await mkdtemp(join(tmpdir(), 'harness-os-forged-'));
+      try {
+        await seedProjectFiles(forged);
+        await writeFile(join(forged, '.git'), `gitdir: ${join(projectPath, '.git', 'worktrees', 'w')}\n`);
+        expect((await verifyConfigIntegrity(pool, forged)).initialized).toBe(false);
+      } finally {
+        await rm(forged, { recursive: true, force: true });
+      }
+    });
+
+    // Claude can write a complete, self-consistent admin dir itself; only Claude Code's worktree location
+    // counts, which never overlaps the main checkout's own files.
+    it('does not trust a checkout outside .claude/worktrees/, even with consistent git files', async () => {
+      const src = join(projectPath, 'src');
+      await mkdir(join(projectPath, 'fake'), { recursive: true });
+      await writeFile(join(projectPath, 'fake', 'commondir'), `${join(projectPath, '.git')}\n`);
+      await writeFile(join(projectPath, 'fake', 'gitdir'), `${join(src, '.git')}\n`);
+      await seedProjectFiles(src);
+      await writeFile(join(src, '.git'), `gitdir: ${join(projectPath, 'fake')}\n`);
+      expect((await verifyConfigIntegrity(pool, src)).initialized).toBe(false);
     });
   });
 });

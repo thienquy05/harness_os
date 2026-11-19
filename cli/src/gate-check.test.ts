@@ -5,6 +5,7 @@ vi.mock('@harness-os/core', () => ({
   createPool: vi.fn(() => ({ end: vi.fn() })),
   checkGate: vi.fn(async () => ({ pass: true })),
   recordTestRun: vi.fn(async () => ({ id: 1, projectPath: '/p', command: 'npm test', phase: 'red', exitCode: 1 })),
+  verifyConfigIntegrity: vi.fn(async () => ({ ok: true, initialized: true, mismatches: [] })),
   TestCommandMismatchError: class TestCommandMismatchError extends Error {},
   GreenWithoutRedError: class GreenWithoutRedError extends Error {},
 }));
@@ -84,5 +85,21 @@ describe('gate-check main', () => {
       exitCode: 1,
     });
     logSpy.mockRestore();
+  });
+
+  // The test command a run is checked against comes from the project's own harness.config.json, an exempt
+  // file: edited to name `false`, it would turn any failing command into a recorded RED. A worktree's copy
+  // is otherwise never verified in a session run by the main checkout's hooks.
+  it('mode record-test-run: refuses to record while the project config does not verify', async () => {
+    const core = await import('@harness-os/core');
+    const { main } = await import('./gate-check.js');
+    vi.mocked(core.verifyConfigIntegrity).mockResolvedValueOnce({ ok: false, initialized: true, mismatches: ['harness.config.json'] });
+    vi.mocked(core.recordTestRun).mockClear();
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const code = await main(['--mode', 'record-test-run', '--project-path', '/p', '--command', 'false', '--exit-code', '1']);
+    expect(code).toBe(1);
+    expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('test_run_rejected'));
+    expect(core.recordTestRun).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });

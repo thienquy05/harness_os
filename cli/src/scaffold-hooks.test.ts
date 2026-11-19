@@ -49,11 +49,17 @@ const gitWith = (env: Record<string, string>, ...args: string[]) => {
   return r.stdout;
 };
 
-function hook(script: string, event: string, command: string, id: string, env: Record<string, string> = {}) {
-  const payload = { hook_event_name: event, session_id: 's', cwd: project, tool_name: 'Bash', tool_input: { command }, tool_use_id: id };
+// `cwd` is the shell's folder Claude Code reports in the payload; it keeps a `cd` between Bash calls,
+// so it can be any subfolder of the project, and the Pre and Post hooks of one call can see different ones.
+function hook(script: string, event: string, command: string, id: string, env: Record<string, string> = {}, cwd = project) {
+  const payload = { hook_event_name: event, session_id: 's', cwd, tool_name: 'Bash', tool_input: { command }, tool_use_id: id };
+  return runHook(script, payload, env, cwd);
+}
+
+function runHook(script: string, payload: object, env: Record<string, string>, cwd: string) {
   return spawnSync('bash', [join(project, '.claude', 'hooks', script)], {
     input: JSON.stringify(payload),
-    cwd: project,
+    cwd,
     encoding: 'utf8',
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log, ...env },
   });
@@ -485,5 +491,226 @@ describe('post-bash-revert.sh', () => {
     const r = hook('post-bash-revert.sh', 'PostToolUse', 'write && git commit --allow-empty', 'p8', { STUB_GATE_EXIT: '1' });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('src/a.ts');
+  });
+});
+
+// The governed project is where the hooks live, not the shell's folder. When it followed the payload's
+// cwd, a call ending in a subfolder (`cd sub && ...`) was compared against `sub/`: every gated file
+// looked written and every config file deleted, and the config "restore" wrote copies into
+// `sub/.claude/` (Vegenus, 2026-11-18). An Edit or Write from a subfolder was refused for missing checksums.
+describe('hooks use the project root whatever folder the shell is in', () => {
+  beforeEach(async () => {
+    await mkdir(join(project, 'sub'));
+  });
+
+  it('does not flag or restore anything for a clean call that changed into a subfolder', async () => {
+    expect(hook('enforce-gate.sh', 'PreToolUse', 'cd sub && ls', 'c1').status).toBe(0);
+    const r = hook('post-bash-revert.sh', 'PostToolUse', 'cd sub && ls', 'c1', { STUB_INTEGRITY_EXIT: '1', STUB_GATE_EXIT: '1' }, join(project, 'sub'));
+    expect(r.stderr).not.toContain('[post-bash-revert]');
+    expect(r.status).toBe(0);
+    await expect(lstat(join(project, 'sub', '.claude'))).rejects.toThrow();
+  });
+
+  it('does not flag anything for a clean call that changed back from a subfolder', async () => {
+    expect(hook('enforce-gate.sh', 'PreToolUse', 'cd .. && ls', 'c2', {}, join(project, 'sub')).status).toBe(0);
+    const r = hook('post-bash-revert.sh', 'PostToolUse', 'cd .. && ls', 'c2', { STUB_INTEGRITY_EXIT: '1', STUB_GATE_EXIT: '1' });
+    expect(r.stderr).not.toContain('[post-bash-revert]');
+    expect(r.status).toBe(0);
+  });
+
+  it('still flags a real gated write made by a call that changed into a subfolder', async () => {
+    expect(hook('enforce-gate.sh', 'PreToolUse', 'node -e write && cd sub', 'c3').status).toBe(0);
+    await writeFile(join(project, 'src', 'a.ts'), 'export const a = 5;\n');
+    const r = hook('post-bash-revert.sh', 'PostToolUse', 'node -e write && cd sub', 'c3', { STUB_GATE_EXIT: '1' }, join(project, 'sub'));
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('src/a.ts');
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Bash --file ${project}/src/a.ts`));
+  });
+
+  it('gates an Edit or Write against the project root while the shell sits in a subfolder', async () => {
+    const payload = { hook_event_name: 'PreToolUse', session_id: 's', cwd: join(project, 'sub'), tool_name: 'Write', tool_input: { file_path: join(project, 'src', 'a.ts'), content: 'x' }, tool_use_id: 'c4' };
+    const r = runHook('enforce-gate.sh', payload, { STUB_GATE_EXIT: '0' }, join(project, 'sub'));
+    expect(r.status).toBe(0);
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Write`));
+  });
+
+  // Run from the root, a subfolder's `npm test` (its own package in a monorepo) would be recorded and shown
+  // as that folder's result. Not intercepting is safe: an unrecorded run never opens the gate.
+  it('leaves a configured test command started from a subfolder to run normally, unrecorded', async () => {
+    const r = hook('enforce-gate.sh', 'PreToolUse', 'false', 'c5', {}, join(project, 'sub'));
+    expect(r.status).toBe(0);
+    expect((await stubCalls()).some((c) => c.includes('--mode record-test-run'))).toBe(false);
+  });
+
+  // The hook path keeps the symlinked spelling (`cd && pwd`) while the payload cwd may be the real path
+  // (macOS /var vs /private/var, a symlinked projects folder): still the project root.
+  it('records a root test command when the hook path and the shell folder spell the root differently', async () => {
+    const linked = `${project}-link`;
+    await symlink(project, linked);
+    try {
+      const payload = { hook_event_name: 'PreToolUse', session_id: 's', cwd: project, tool_name: 'Bash', tool_input: { command: 'false' }, tool_use_id: 'c7' };
+      const r = spawnSync('bash', [join(linked, '.claude', 'hooks', 'enforce-gate.sh')], {
+        input: JSON.stringify(payload),
+        cwd: project,
+        encoding: 'utf8',
+        env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log },
+      });
+      expect(r.status).toBe(2);
+      expect((await stubCalls()).some((c) => c.includes('--mode record-test-run'))).toBe(true);
+    } finally {
+      await unlink(linked);
+    }
+  });
+
+  // A redirect target is relative to the shell's folder: `echo > a.ts` in src/ writes the gated src/a.ts.
+  it('judges a relative Bash write target from the folder the shell is in', async () => {
+    const r = hook('enforce-gate.sh', 'PreToolUse', 'echo x > a.ts', 'c6', { STUB_GATE_EXIT: '1' }, join(project, 'src'));
+    expect(r.status).toBe(2);
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Bash --file ${project}/src/a.ts`));
+  });
+});
+
+
+// Claude Code keeps worktrees at <project>/.claude/worktrees/<name>/ (checked 2026-11-18 with Claude Code
+// 2.1.327). Subagent isolation and EnterWorktree run the main checkout's hooks with cwd and file_path in
+// the worktree; `claude --worktree` runs the worktree's own copy. The hooks always speak for their own
+// checkout and leave it to gate-check which checkout governs a file (packages/core gates.ts), so a write
+// across checkouts is never judged against the wrong root. The post-Bash check watches the main checkout
+// and every worktree. Only a test command typed at a worktree root is run and recorded for that worktree.
+describe('hooks across Claude Code worktrees', () => {
+  let worktree: string;
+
+  beforeEach(() => {
+    worktree = join(project, '.claude', 'worktrees', 'w');
+    git('worktree', 'add', '-q', worktree, '-b', 'w');
+  });
+
+  // Runs a hook from the given checkout's own .claude/hooks (hookRoot), as Claude Code does.
+  const at = (hookRoot: string, script: string, payload: Record<string, unknown>, env: Record<string, string> = {}) =>
+    spawnSync('bash', [join(hookRoot, '.claude', 'hooks', script)], {
+      input: JSON.stringify({ session_id: 's', ...payload }),
+      cwd: payload.cwd as string,
+      encoding: 'utf8',
+      env: { ...process.env, PATH: `${bin}:${process.env.PATH}`, STUB_LOG: log, ...env },
+    });
+  const write = (hookRoot: string, cwd: string, filePath: string, id: string) =>
+    at(hookRoot, 'enforce-gate.sh', { hook_event_name: 'PreToolUse', cwd, tool_name: 'Write', tool_input: { file_path: filePath, content: 'x' }, tool_use_id: id });
+  const bash = (hookRoot: string, event: string, cwd: string, command: string, id: string, env: Record<string, string> = {}) =>
+    at(hookRoot, event === 'PreToolUse' ? 'enforce-gate.sh' : 'post-bash-revert.sh', { hook_event_name: event, cwd, tool_name: 'Bash', tool_input: { command }, tool_use_id: id }, env);
+
+  it("sends a write into a worktree to gate-check as the hooks' project with the absolute file (main checkout's hooks)", async () => {
+    expect(write(project, worktree, join(worktree, 'src', 'a.ts'), 'w1').status).toBe(0);
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Write --file ${worktree}/src/a.ts`));
+  });
+
+  it("sends a write into the main checkout to gate-check from a worktree's own hooks (claude --worktree)", async () => {
+    expect(write(worktree, worktree, join(project, 'src', 'a.ts'), 'w2').status).toBe(0);
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${worktree} --tool Write --file ${project}/src/a.ts`));
+  });
+
+  it('resolves a Bash redirect from a worktree shell into the main checkout to the file it writes', async () => {
+    bash(project, 'PreToolUse', worktree, 'echo x > ../../../src/a.ts', 'w3', { STUB_GATE_EXIT: '1' });
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Bash --file ${project}/src/a.ts`));
+  });
+
+  it('flags a gated write a Bash call made inside a worktree', async () => {
+    expect(bash(project, 'PreToolUse', worktree, 'node -e write', 'w4').status).toBe(0);
+    await writeFile(join(worktree, 'src', 'a.ts'), 'export const a = 6;\n');
+    const r = bash(project, 'PostToolUse', worktree, 'node -e write', 'w4', { STUB_GATE_EXIT: '1' });
+    expect(r.status).toBe(2);
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Bash --file ${project}/.claude/worktrees/w/src/a.ts`));
+  });
+
+  it('flags a gated write into the main checkout by a Bash call whose shell sits in a worktree', async () => {
+    expect(bash(project, 'PreToolUse', worktree, 'cp src/a.ts ../../../src/a.ts', 'w5').status).toBe(0);
+    await writeFile(join(project, 'src', 'a.ts'), 'export const a = 7;\n');
+    const r = bash(project, 'PostToolUse', worktree, 'cp src/a.ts ../../../src/a.ts', 'w5', { STUB_GATE_EXIT: '1' });
+    expect(r.status).toBe(2);
+    expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${project} --tool Bash --file ${project}/src/a.ts`));
+  });
+
+  it("flags a gated write into the main checkout made under a worktree's own hooks (claude --worktree)", async () => {
+    expect(bash(worktree, 'PreToolUse', worktree, 'cp src/a.ts ../../../src/a.ts', 'w6').status).toBe(0);
+    await writeFile(join(project, 'src', 'a.ts'), 'export const a = 8;\n');
+    const r = bash(worktree, 'PostToolUse', worktree, 'cp src/a.ts ../../../src/a.ts', 'w6', { STUB_GATE_EXIT: '1' });
+    expect(r.status).toBe(2);
+    expect(await stubCalls()).toContainEqual(expect.stringMatching(new RegExp(`--project-path ${worktree} --tool Bash --file ${worktree}/\\.\\./\\.\\./\\.\\./src/a\\.ts`)));
+  });
+
+  it('raises nothing for a clean call that moves between the main checkout and a worktree', async () => {
+    const clean = { STUB_INTEGRITY_EXIT: '1', STUB_GATE_EXIT: '1' };
+    expect(bash(project, 'PreToolUse', project, 'cd .claude/worktrees/w', 'w7').status).toBe(0);
+    const into = bash(project, 'PostToolUse', worktree, 'cd .claude/worktrees/w', 'w7', clean);
+    expect(bash(project, 'PreToolUse', worktree, 'cd ../../..', 'w8').status).toBe(0);
+    const back = bash(project, 'PostToolUse', project, 'cd ../../..', 'w8', clean);
+    for (const r of [into, back]) {
+      expect(r.stderr).not.toContain('[post-bash-revert]');
+      expect(r.status).toBe(0);
+    }
+  });
+
+  it('runs and records a test command typed at a worktree root for that worktree', async () => {
+    expect(hook('enforce-gate.sh', 'PreToolUse', 'false', 'w9', {}, worktree).status).toBe(2);
+    expect(await stubCalls()).toContainEqual(expect.stringMatching(new RegExp(`--mode record-test-run --project-path ${worktree} .*--exit-code 1$`)));
+  });
+
+  // Claude can write a self-consistent admin dir and a .git file anywhere; outside .claude/worktrees/ that
+  // is not a worktree, so a test command there is not recorded as some checkout's RED.
+  it('does not record a test command typed at a forged checkout outside .claude/worktrees/', async () => {
+    await mkdir(join(project, 'fake'));
+    await writeFile(join(project, 'fake', 'commondir'), `${join(project, '.git')}\n`);
+    await writeFile(join(project, 'fake', 'gitdir'), `${join(project, 'src', '.git')}\n`);
+    await writeFile(join(project, 'src', '.git'), `gitdir: ${join(project, 'fake')}\n`);
+    expect(hook('enforce-gate.sh', 'PreToolUse', 'false', 'w10', {}, join(project, 'src')).status).toBe(0);
+    expect((await stubCalls()).some((c) => c.includes('--mode record-test-run'))).toBe(false);
+  });
+
+  // The "file matches a commit that existed before the call" exemption is about this checkout's HEAD; it
+  // says nothing about another checkout's files (git cannot even look them up: both sides were null).
+  it('still flags a write into another checkout when the same call also moved HEAD to an existing commit', async () => {
+    spawnSync('git', ['commit', '-q', '--allow-empty', '-m', 'second'], { cwd: worktree });
+    expect(bash(worktree, 'PreToolUse', worktree, 'git checkout -q HEAD~1 && cp x ../../../src/a.ts', 'w11').status).toBe(0);
+    spawnSync('git', ['checkout', '-q', 'HEAD~1'], { cwd: worktree });
+    await writeFile(join(project, 'src', 'a.ts'), 'export const a = 9;\n');
+    const r = bash(worktree, 'PostToolUse', worktree, 'git checkout -q HEAD~1 && cp x ../../../src/a.ts', 'w11', { STUB_GATE_EXIT: '1' });
+    expect(r.status).toBe(2);
+    expect(r.stderr).toContain('src/a.ts');
+  });
+
+  // The hooks' own checkout is always watched, whatever kind of checkout it is.
+  it('watches a manual worktree outside .claude/worktrees/ that runs its own hooks', async () => {
+    const feature = `${project}-feature`;
+    git('worktree', 'add', '-q', feature, '-b', 'feature');
+    try {
+      expect(bash(feature, 'PreToolUse', feature, 'node -e write', 'w12').status).toBe(0);
+      await writeFile(join(feature, 'src', 'a.ts'), 'export const a = 10;\n');
+      const r = bash(feature, 'PostToolUse', feature, 'node -e write', 'w12', { STUB_GATE_EXIT: '1' });
+      expect(r.status).toBe(2);
+      expect(await stubCalls()).toContainEqual(expect.stringContaining(`--project-path ${feature} --tool Bash --file ${feature}/src/a.ts`));
+    } finally {
+      await rm(feature, { recursive: true, force: true });
+    }
+  });
+
+  it('watches a project whose git dir lives elsewhere (--separate-git-dir; a submodule is alike)', async () => {
+    const separate = await mkdtemp(join(tmpdir(), 'harness-os-separate-'));
+    const gitDir = await mkdtemp(join(tmpdir(), 'harness-os-separate-git-'));
+    try {
+      await cp(join(project, '.claude'), join(separate, '.claude'), { recursive: true });
+      await mkdir(join(separate, 'src'));
+      await writeFile(join(separate, 'src', 'a.ts'), 'export const a = 1;\n');
+      const g = (...args: string[]) => spawnSync('git', args, { cwd: separate });
+      g('init', '-q', '--separate-git-dir', join(gitDir, 'x.git'));
+      g('-c', 'user.email=t@example.test', '-c', 'user.name=t', 'add', '-A');
+      g('-c', 'user.email=t@example.test', '-c', 'user.name=t', 'commit', '-q', '-m', 'init');
+      expect(bash(separate, 'PreToolUse', separate, 'node -e write', 'w13').status).toBe(0);
+      await writeFile(join(separate, 'src', 'a.ts'), 'export const a = 11;\n');
+      const r = bash(separate, 'PostToolUse', separate, 'node -e write', 'w13', { STUB_GATE_EXIT: '1' });
+      expect(r.status).toBe(2);
+      expect(r.stderr).toContain('src/a.ts');
+    } finally {
+      await rm(separate, { recursive: true, force: true });
+      await rm(gitDir, { recursive: true, force: true });
+    }
   });
 });

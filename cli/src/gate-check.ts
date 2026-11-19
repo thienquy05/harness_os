@@ -5,6 +5,7 @@ import {
   GreenWithoutRedError,
   recordTestRun,
   TestCommandMismatchError,
+  verifyConfigIntegrity,
 } from '@harness-os/core';
 
 interface ParsedArgs {
@@ -70,6 +71,17 @@ async function runRecordTestRun(argv: ParsedArgs): Promise<number> {
 
   const pool = createPool();
   try {
+    // The command a run is checked against comes from the project's harness.config.json (exempt from the
+    // RED gate, so editable at any time): only a verified config may define what a recorded RED means. A
+    // worktree is verified against its main checkout's records (verifyConfigIntegrity).
+    const integrity = await verifyConfigIntegrity(pool, argv.projectPath);
+    if (!integrity.ok) {
+      const reason = integrity.initialized
+        ? `config drift in ${integrity.mismatches.join(', ')}: not recording until it is reconciled`
+        : 'project not initialized: not recording';
+      console.error(JSON.stringify({ action: 'test_run_rejected', reason }));
+      return 1;
+    }
     const row = await recordTestRun(pool, {
       projectPath: argv.projectPath,
       command: argv.command,

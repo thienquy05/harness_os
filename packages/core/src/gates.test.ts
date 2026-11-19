@@ -1,13 +1,19 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { mkdir, mkdtemp, realpath, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { promisify } from 'node:util';
 import type { Pool } from 'pg';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { recordVerifiedConfig } from './config-integrity.js';
 import { checkGate } from './gates.js';
 
+const execFileAsync = promisify(execFile);
+
+// `redFor`: the project paths whose latest recorded run is red (per checkout); otherwise every path
+// answers `latestTestRunPhase`.
 function fakePool(
-  options: { latestTestRunPhase?: 'red' | 'green' } = {},
+  options: { latestTestRunPhase?: 'red' | 'green'; redFor?: Set<string> } = {},
 ): { pool: Pool; checksums: Map<string, string>; decisions: Array<Record<string, unknown>> } {
   const checksums = new Map<string, string>();
   const decisions: Array<Record<string, unknown>> = [];
@@ -26,6 +32,10 @@ function fakePool(
       if (text.includes('INSERT INTO decisions')) {
         decisions.push({ params });
         return { rows: [{ id: decisions.length }] };
+      }
+      if (text.includes('FROM test_runs') && options.redFor) {
+        const red = options.redFor.has(params[0] as string);
+        return { rows: red ? [{ id: 1, project_path: params[0], command: 'npm test', phase: 'red', exit_code: 1, created_at: 'now' }] : [] };
       }
       if (text.includes('FROM test_runs')) {
         return {
@@ -152,5 +162,58 @@ describe('checkGate', () => {
     const result = await checkGate(pool, { projectPath, tool: 'Write', filePath: absoluteFilePath });
     expect(result.pass).toBe(false);
     expect(result.directive?.action).toBe('establish_red_phase');
+  });
+});
+
+// Claude Code keeps worktrees at <main>/.claude/worktrees/<name>/ (checked 2026-11-18, Claude Code
+// 2.1.327). Subagent isolation and EnterWorktree run the main checkout's hooks, `claude --worktree` the
+// worktree's own copy. Either way a file is governed by the checkout it lies in, judged against that
+// checkout's root and its own recorded RED; only that exact location counts as a worktree.
+describe('checkGate across Claude Code worktrees', () => {
+  let main: string;
+  let worktree: string;
+  let redFor: Set<string>;
+  let pool: Pool;
+
+  const gate = (projectPath: string, filePath: string) => checkGate(pool, { projectPath, tool: 'Write', filePath });
+
+  beforeEach(async () => {
+    main = await realpath(await mkdtemp(join(tmpdir(), 'harness-os-gates-wt-')));
+    await seedProjectFiles(main, '{"gatedGlobs":["src/**/*.ts"]}');
+    redFor = new Set();
+    ({ pool } = fakePool({ redFor }));
+    await execFileAsync('git', ['init', '-q'], { cwd: main });
+    await recordVerifiedConfig(pool, main, 'test-human');
+    worktree = join(main, '.claude', 'worktrees', 'w');
+    await execFileAsync('git', ['worktree', 'add', '-q', worktree, '-b', 'w'], { cwd: main });
+  });
+
+  afterEach(async () => {
+    await rm(main, { recursive: true, force: true });
+  });
+
+  it("gates a file in a worktree by that worktree's own RED, not the main checkout's", async () => {
+    redFor.add(main);
+    expect((await gate(main, join(worktree, 'src', 'a.ts'))).directive?.action).toBe('establish_red_phase');
+    redFor.add(worktree);
+    expect((await gate(main, join(worktree, 'src', 'a.ts'))).pass).toBe(true);
+  });
+
+  it("gates a main-checkout file written from a worktree session by the main checkout's RED", async () => {
+    redFor.add(worktree);
+    expect((await gate(worktree, join(main, 'src', 'a.ts'))).directive?.action).toBe('establish_red_phase');
+    redFor.add(main);
+    expect((await gate(worktree, join(main, 'src', 'a.ts'))).pass).toBe(true);
+  });
+
+  it('keeps gating src/ when a forged .git file makes src/ look like a worktree', async () => {
+    await mkdir(join(main, 'fake'));
+    await writeFile(join(main, 'fake', 'commondir'), `${join(main, '.git')}\n`);
+    await writeFile(join(main, 'fake', 'gitdir'), `${join(main, 'src', '.git')}\n`);
+    await mkdir(join(main, 'src'), { recursive: true });
+    await writeFile(join(main, 'src', '.git'), `gitdir: ${join(main, 'fake')}\n`);
+    redFor.add(join(main, 'src'));
+    expect((await gate(main, join(main, 'src', 'foo.ts'))).directive?.action).toBe('establish_red_phase');
+    expect((await gate(join(main, 'src'), join(main, 'src', 'foo.ts'))).pass).toBe(false);
   });
 });
